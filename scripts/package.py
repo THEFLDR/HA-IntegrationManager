@@ -47,9 +47,10 @@ def build(output: Path, tag: str | None = None) -> Path:
             archive.writestr(info, data)
     data = target.read_bytes()
     validate_archive(data, DOMAIN, version, MIN_HA_VERSION)
-    if (
-        contents[f"custom_components/{DOMAIN}/frontend/icon.png"]
-        != (ROOT / "approved-icon.png").read_bytes()
+    approved_icon = (ROOT / "approved-icon.png").read_bytes()
+    if any(
+        contents[f"custom_components/{DOMAIN}/{name}"] != approved_icon
+        for name in ("frontend/icon.png", "brand/icon.png")
     ):
         raise ValueError("Official icon must be reused unchanged")
     (output / "SHA256SUMS").write_text(f"{hashlib.sha256(data).hexdigest()}  {target.name}\n")

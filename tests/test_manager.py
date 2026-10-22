@@ -105,6 +105,76 @@ async def test_self_update_rejects_prefixed_requested_version(runtime, archive, 
     runtime.client.download.assert_not_called()
 
 
+@pytest.mark.parametrize("mode", ["managed", "default", "override"])
+@pytest.mark.parametrize("global_channel", ["stable", "release_candidate"])
+@pytest.mark.parametrize("override", ["stable", "release_candidate"])
+async def test_self_update_uses_effective_channel(
+    runtime, archive, release_payload, mode, global_channel, override
+):
+    import json
+
+    runtime.entry.options = {
+        "channel_mode": mode,
+        "global_channel": global_channel,
+        "channel": override,
+    }
+    prepare(runtime, archive, release_payload, DOMAIN, "0.2.0")
+    stable = runtime.client.releases.return_value[0]
+    prepare(runtime, archive, release_payload, DOMAIN, "0.3.0")
+    candidate = runtime.client.releases.return_value[0]
+    candidate["prerelease"] = True
+    runtime.client.releases.return_value = [stable, candidate]
+    effective = global_channel if mode == "managed" else "stable" if mode == "default" else override
+    selected = "0.3.0" if effective == "release_candidate" else "0.2.0"
+    runtime.client.download.return_value = archive(DOMAIN, selected)
+    await runtime.self_update(selected)
+    assert runtime.client.download.call_args.args[2].version == selected
+    assert (
+        json.loads((runtime.store.root / DOMAIN / "manifest.json").read_text())["version"]
+        == selected
+    )
+
+
+@pytest.mark.parametrize("outcome", ["current", "available", "failure"])
+async def test_dashboard_check_reuses_coordinator(hass, runtime, archive, release_payload, outcome):
+    from datetime import timedelta
+
+    from custom_components.integrationmanager.coordinator import async_get_coordinator
+
+    runtime.hass = hass
+    hass.data[DOMAIN] = runtime
+    runtime.entry.async_on_unload = Mock()
+    coordinator = await async_get_coordinator(hass, runtime.entry, runtime)
+    assert coordinator.update_interval == timedelta(hours=6)
+    initial_calls = runtime.client.releases.call_count
+    if outcome == "available":
+        prepare(runtime, archive, release_payload, DOMAIN)
+    elif outcome == "failure":
+        runtime.client.releases.side_effect = GitHubError("offline")
+    if outcome == "failure":
+        with pytest.raises(InstallError, match="Update check failed.*offline"):
+            await runtime.check_for_updates()
+        assert not coordinator.last_update_success
+    else:
+        message = await runtime.check_for_updates()
+        assert ("Update available: 0.2.0" if outcome == "available" else "up to date") in message
+        assert coordinator.last_update_success
+    assert await async_get_coordinator(hass, runtime.entry, runtime) is coordinator
+    assert coordinator.update_interval == timedelta(hours=6)
+    assert runtime.client.releases.call_count == initial_calls + 1
+    runtime.client.invalidate_releases.assert_called_once()
+
+
+async def test_catalog_installation_uses_global_channel(runtime, release_payload):
+    runtime.entry.options = {
+        "global_channel": "release_candidate",
+        "channel_mode": "override",
+        "channel": "stable",
+    }
+    runtime.client.releases.return_value = [release_payload("0.3.0", prerelease=True)]
+    assert (await runtime.release("THEFLDR/HA-Sample", "sample")).version == "0.3.0"
+
+
 async def test_no_update_and_unmatched_request(runtime, archive, release_payload):
     with pytest.raises(InstallError, match="No newer"):
         await runtime.self_update()

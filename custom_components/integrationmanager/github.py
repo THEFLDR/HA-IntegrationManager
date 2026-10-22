@@ -21,6 +21,14 @@ class GitHubClient:
         self.session = session
         self.cache = {}
 
+    def invalidate_releases(self, repository):
+        """Allow an explicit update check to bypass only that repository's cache."""
+        validate_repository(repository)
+        prefix = f"https://api.github.com/repos/{repository}/releases?"
+        for url in list(self.cache):
+            if url.startswith(prefix):
+                del self.cache[url]
+
     async def _read(self, url: str, limit: int, accept: str) -> bytes:
         try:
             async with asyncio.timeout(30):

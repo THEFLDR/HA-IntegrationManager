@@ -1,6 +1,6 @@
 """Local read-only channel interface; no persisted state or synchronization."""
 
-from .const import CHANNELS, DOMAIN, STABLE
+from .const import CHANNEL_MODES, CHANNELS, DEFAULT, DOMAIN, MANAGED, OVERRIDE, STABLE
 
 
 def get_global_channel(hass) -> str | None:
@@ -10,12 +10,18 @@ def get_global_channel(hass) -> str | None:
     null/explicit override and use Stable when this returns None.
     """
     runtime = hass.data.get(DOMAIN)
-    return runtime.entry.options.get("channel", STABLE) if runtime else None
+    if runtime is None:
+        return None
+    return runtime.entry.options.get("global_channel", runtime.entry.options.get("channel", STABLE))
 
 
-def resolve_channel(hass, override: str | None = None) -> dict[str, str]:
+def resolve_channel(hass, override: str | None = None, mode: str | None = None) -> dict[str, str]:
     """Resolve an integration's intent without changing its persisted override."""
-    if override is not None:
+    if mode is None:
+        mode = OVERRIDE if override is not None else MANAGED
+    if mode not in CHANNEL_MODES:
+        raise ValueError("Invalid release channel mode")
+    if mode == OVERRIDE:
         if override not in CHANNELS:
             raise ValueError("Invalid release channel")
         return {
@@ -23,6 +29,8 @@ def resolve_channel(hass, override: str | None = None) -> dict[str, str]:
             "effective_channel": override,
             "source": "override",
         }
+    if mode == DEFAULT:
+        return {"state": "Stable", "effective_channel": STABLE, "source": DEFAULT}
     channel = get_global_channel(hass)
     return {
         "state": "Managed" if channel else "Stable",

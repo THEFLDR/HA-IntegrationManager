@@ -52,6 +52,8 @@ export class IntegrationManagerPanel extends HTMLElement {
       const overview = await this.call("overview");
       this.items = overview.integrations;
       this.channel = overview.channel;
+      this.managerMode = overview.manager_channel_mode || "managed";
+      this.managerOverride = overview.manager_channel_override || "stable";
       this.restart = overview.restart_required;
       try {
         this.catalog = (await this.call("catalog")).integrations;
@@ -87,6 +89,7 @@ export class IntegrationManagerPanel extends HTMLElement {
   async perform(action, extra) {
     if (this.busy) return;
     this.busy = true;
+    if (action === "check_updates") this.message = "Checking for updates…";
     this.render();
     try {
       const result = await this.call(action, extra);
@@ -102,7 +105,18 @@ export class IntegrationManagerPanel extends HTMLElement {
   updateStates() {
     for (const target of this.shadowRoot.querySelectorAll("[data-entity]")) {
       const state = this._hass.states[target.dataset.entity];
-      target.textContent = state?.state || "unavailable";
+      const value = state?.state || "unavailable";
+      const kind = target.dataset.kind;
+      let label = value;
+      if (value === "unknown") label = "Unknown";
+      else if (value === "unavailable") label = "Unavailable";
+      else if (kind === "health") label = { off: "OK", on: "Problem" }[value] || value;
+      else if (kind === "update") label = { off: "Up-to-date", on: "Update available" }[value] || value;
+      else if (kind === "release_channel") {
+        const effective = state.attributes?.effective_channel || value;
+        label = { stable: "Stable", release_candidate: "Release Candidate", Stable: "Stable", "Release Candidate": "Release Candidate" }[effective] || "Unknown";
+      }
+      target.textContent = label;
     }
   }
 
@@ -128,7 +142,32 @@ export class IntegrationManagerPanel extends HTMLElement {
     }
     select.disabled = this.busy || this.restart;
     select.addEventListener("change", () => this.perform("channel", { channel: select.value }));
+    const modeLabel = this.node("label", "Integration Manager release channel mode: ", settings);
+    const mode = this.node("select", undefined, modeLabel);
+    for (const [value, text] of [["managed", "Managed"], ["default", "Default"], ["override", "Override"]]) {
+      const option = this.node("option", text, mode);
+      option.value = value;
+      option.selected = (this.managerMode || "managed") === value;
+    }
+    mode.disabled = this.busy || this.restart;
+    mode.addEventListener("change", () => this.perform("manager_channel", {
+      mode: mode.value,
+      ...(mode.value === "override" ? { channel: this.managerOverride || "stable" } : {}),
+    }));
+    this.node("small", "Managed follows the global channel. Default always uses Stable. Override uses the channel selected below.", settings);
+    if (this.managerMode === "override") {
+      const overrideLabel = this.node("label", "Integration Manager override channel: ", settings);
+      const override = this.node("select", undefined, overrideLabel);
+      for (const [value, text] of [["stable", "Stable"], ["release_candidate", "Release Candidate"]]) {
+        const option = this.node("option", text, override);
+        option.value = value;
+        option.selected = this.managerOverride === value;
+      }
+      override.disabled = this.busy || this.restart;
+      override.addEventListener("change", () => this.perform("manager_channel", { mode: "override", channel: override.value }));
+    }
     this.button("Refresh", settings, () => this.refresh());
+    this.button("Check for Updates", settings, () => this.perform("check_updates"));
     const installed = this.node("section", undefined, root);
     this.node("h2", "Installed custom integrations", installed);
     this.node("p", "Native Health, Update and Release Channel entities are shown when their integration provides them. Open an entity to use its native controls.", installed);
@@ -142,6 +181,7 @@ export class IntegrationManagerPanel extends HTMLElement {
         this.button(entity.name, line, () => this.dispatchEvent(new CustomEvent("hass-more-info", { detail: { entityId: entity.entity_id }, bubbles: true, composed: true })));
         const state = this.node("span", entity.state, line);
         state.dataset.entity = entity.entity_id;
+        state.dataset.kind = entity.kind || (entity.entity_id.startsWith("update.") ? "update" : "");
         if (entity.disabled || entity.hidden) this.node("small", "This native entity is disabled or hidden in its registry settings.", line);
       }
       if (item.domain !== "integrationmanager") {

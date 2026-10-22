@@ -73,17 +73,26 @@ async def overview(hass, store, catalog):
         # Include only existing native entities. Never create or enable/disable another integration's entities.
         kind = entity.domain
         label = (entity.original_name or entity.name or "").casefold()
-        if kind != "update" and not (
-            entity.translation_key in {"health", "release_channel"}
-            or label in {"health", "release channel"}
+        if kind == "update":
+            entity_kind = "update"
+        elif entity.translation_key == "release_channel_mode" or label == "release channel mode":
+            entity_kind = "release_channel_mode"
+        elif entity.translation_key == "release_channel" or label == "release channel":
+            entity_kind = "release_channel"
+        elif (
+            entity.translation_key == "health"
+            or label == "health"
             or (kind == "binary_sensor" and entity.original_device_class == "problem")
         ):
+            entity_kind = "health"
+        else:
             continue
         state = hass.states.get(entity.entity_id)
         for domain in domains:
             installed[domain]["entities"].append(
                 {
                     "entity_id": entity.entity_id,
+                    "kind": entity_kind,
                     "name": entity.name or entity.original_name or entity.entity_id,
                     "state": state.state if state else "unavailable",
                     "attributes": dict(state.attributes) if state else {},

@@ -93,6 +93,7 @@ def runtime(tmp_path):
         catalog=AsyncMock(return_value=[]),
         releases=AsyncMock(return_value=[]),
         download=AsyncMock(),
+        invalidate_releases=Mock(),
     )
     manager = Manager(hass, entry, client, FileStore(str(tmp_path)))
     hass.data[DOMAIN] = manager

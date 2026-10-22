@@ -14,17 +14,18 @@ from scripts.package import ROOT, build
 
 
 def test_package_deterministic_and_installable(tmp_path):
-    artifact = build(tmp_path, "0.1.1")
+    artifact = build(tmp_path, "0.1.2")
     first = artifact.read_bytes()
-    assert build(tmp_path, "0.1.1").read_bytes() == first
+    assert build(tmp_path, "0.1.2").read_bytes() == first
     assert MIN_HA_VERSION == "2025.12.0"
-    files = validate_archive(first, DOMAIN, "0.1.1", MIN_HA_VERSION)
+    files = validate_archive(first, DOMAIN, "0.1.2", MIN_HA_VERSION)
     with zipfile.ZipFile(artifact) as archive:
         assert (
             json.loads(archive.read("release.json"))["minimum_home_assistant_version"]
             == MIN_HA_VERSION
         )
     assert files["frontend/icon.png"] == (ROOT / "approved-icon.png").read_bytes()
+    assert files["brand/icon.png"] == (ROOT / "approved-icon.png").read_bytes()
     assert "frontend/panel.js" in files
     assert all("__pycache__" not in f for f in files)
     assert (tmp_path / "SHA256SUMS").read_text().startswith(hashlib.sha256(first).hexdigest())
@@ -68,7 +69,7 @@ def test_manifest_and_catalog():
     manifest = json.loads((ROOT / f"custom_components/{DOMAIN}/manifest.json").read_text())
     assert manifest["domain"] == DOMAIN
     assert manifest["codeowners"] == ["@THEFLDR"]
-    assert manifest["version"] == "0.1.1"
+    assert manifest["version"] == "0.1.2"
     assert parse_catalog(json.loads((ROOT / "repositories.json").read_text())) == []
 
 

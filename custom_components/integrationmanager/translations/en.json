@@ -14,10 +14,12 @@
   "options": {
     "step": {
       "init": {
-        "title": "Global release channel",
-        "description": "Stable uses regular releases. Release Candidate also permits recognized GitHub prereleases. Compatible integrations with no explicit override use this setting while Manager is loaded; otherwise they fall back to Stable.",
+        "title": "Release channels",
+        "description": "The global channel is used by managed integrations. Integration Manager in Managed mode follows it, Default always uses Stable, and Override uses its own selected channel.",
         "data": {
-          "channel": "Release channel"
+          "global_channel": "Global release channel",
+          "channel_mode": "Integration Manager channel mode",
+          "channel": "Override release channel (used only in Override mode)"
         }
       }
     }
@@ -26,6 +28,9 @@
     "sensor": {
       "release_channel": {
         "name": "Release Channel"
+      },
+      "release_channel_mode": {
+        "name": "Release Channel Mode"
       }
     },
     "update": {
