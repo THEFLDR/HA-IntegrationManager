@@ -102,7 +102,7 @@ async def test_pagination():
 async def test_download_digest_and_immutable_url():
     data = b"artifact"
     release = Release(
-        "v0.2.0",
+        "0.2.0",
         "0.2.0",
         42,
         hashlib.sha256(data).hexdigest(),
@@ -114,7 +114,7 @@ async def test_download_digest_and_immutable_url():
     assert await github.download("THEFLDR/Repo", "sample", release) == data
     assert (
         github.session.get.call_args.args[0]
-        == "https://github.com/THEFLDR/Repo/releases/download/v0.2.0/sample.zip"
+        == "https://github.com/THEFLDR/Repo/releases/download/0.2.0/sample.zip"
     )
     with pytest.raises(GitHubError, match="checksum"):
         await client(Response(b"corrupt")).download("THEFLDR/Repo", "sample", release)

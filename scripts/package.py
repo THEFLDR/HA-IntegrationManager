@@ -6,10 +6,9 @@ import json
 import zipfile
 from pathlib import Path
 
-from packaging.version import Version
-
 from custom_components.integrationmanager.const import DOMAIN, MIN_HA_VERSION, VERSION
 from custom_components.integrationmanager.files import validate_archive
+from custom_components.integrationmanager.version import is_release_version
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -18,10 +17,10 @@ def build(output: Path, tag: str | None = None) -> Path:
     source = ROOT / "custom_components" / DOMAIN
     manifest = json.loads((source / "manifest.json").read_text())
     version = manifest["version"]
-    if version != VERSION:
+    if not is_release_version(version) or version != VERSION:
         raise ValueError("Runtime and manifest versions differ")
-    if tag and Version(tag) != Version(version):
-        raise ValueError("Release tag and integration manifest version differ")
+    if tag is not None and (not is_release_version(tag) or tag != version):
+        raise ValueError("Release tag must be X.Y.Z and match the integration manifest version")
     output.mkdir(parents=True, exist_ok=True)
     target = output / f"{DOMAIN}.zip"
     contents = {}

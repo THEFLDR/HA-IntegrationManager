@@ -171,9 +171,9 @@ async def test_native_entities_and_update_errors(hass, runtime):
     runtime.self_update = AsyncMock(side_effect=InstallError("download error"))
     with pytest.raises(HomeAssistantError, match="download error"):
         await entity.async_install(None, False)
-    entity.coordinator.data = SimpleNamespace(version="0.2.0", notes="Release notes", tag="v0.2.0")
+    entity.coordinator.data = SimpleNamespace(version="0.2.0", notes="Release notes", tag="0.2.0")
     assert entity.latest_version == "0.2.0"
-    assert entity.release_url.endswith("v0.2.0")
+    assert entity.release_url.endswith("0.2.0")
     assert await entity.async_release_notes() == "Release notes"
     runtime.self_update = AsyncMock()
     entity.async_write_ha_state = Mock()

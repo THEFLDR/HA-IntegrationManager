@@ -14,11 +14,11 @@ from scripts.package import ROOT, build
 
 
 def test_package_deterministic_and_installable(tmp_path):
-    artifact = build(tmp_path, "v0.1.0")
+    artifact = build(tmp_path, "0.1.1")
     first = artifact.read_bytes()
-    assert build(tmp_path, "v0.1.0").read_bytes() == first
+    assert build(tmp_path, "0.1.1").read_bytes() == first
     assert MIN_HA_VERSION == "2025.12.0"
-    files = validate_archive(first, DOMAIN, "0.1.0", MIN_HA_VERSION)
+    files = validate_archive(first, DOMAIN, "0.1.1", MIN_HA_VERSION)
     with zipfile.ZipFile(artifact) as archive:
         assert (
             json.loads(archive.read("release.json"))["minimum_home_assistant_version"]
@@ -29,7 +29,7 @@ def test_package_deterministic_and_installable(tmp_path):
     assert all("__pycache__" not in f for f in files)
     assert (tmp_path / "SHA256SUMS").read_text().startswith(hashlib.sha256(first).hexdigest())
     with pytest.raises(ValueError, match="tag"):
-        build(tmp_path, "v0.2.0")
+        build(tmp_path, "0.2.0")
 
 
 def test_workflow_names_permissions_and_no_automatic_publication():
@@ -51,6 +51,9 @@ def test_workflow_names_permissions_and_no_automatic_publication():
         if name != "ci.yml":
             assert set(events) == {"workflow_dispatch"}
             assert any("${{ inputs.sha }}" in str(job) for job in data["jobs"].values())
+            assert "X.Y.Z" in events["workflow_dispatch"]["inputs"]["tag"]["description"]
+            assert "0.1.1" in events["workflow_dispatch"]["inputs"]["tag"]["description"]
+            assert "python -m scripts.release " in str(data)
     promotion = (ROOT / ".github/workflows/promotion.yml").read_text()
     assert "scripts.package" not in promotion
     assert "sandbox_tested" in promotion
@@ -62,14 +65,14 @@ def test_manifest_and_catalog():
     manifest = json.loads((ROOT / f"custom_components/{DOMAIN}/manifest.json").read_text())
     assert manifest["domain"] == DOMAIN
     assert manifest["codeowners"] == ["@THEFLDR"]
-    assert manifest["version"] == "0.1.0"
+    assert manifest["version"] == "0.1.1"
     assert parse_catalog(json.loads((ROOT / "repositories.json").read_text())) == []
 
 
 def test_same_immutable_release_promotion(monkeypatch):
     before = {
         "id": 1,
-        "tag_name": "v0.1.0",
+        "tag_name": "0.1.1",
         "immutable": True,
         "prerelease": True,
         "assets": [
@@ -96,7 +99,7 @@ def test_same_immutable_release_promotion(monkeypatch):
     api = Mock(side_effect=responses)
     monkeypatch.setenv("GITHUB_REPOSITORY", "THEFLDR/HA-IntegrationManager")
     monkeypatch.setattr(publisher, "api", api)
-    publisher.main("promote", "v0.1.0", "a" * 40)
+    publisher.main("promote", "0.1.1", "a" * 40)
     assert api.call_args.args == (
         "repos/THEFLDR/HA-IntegrationManager/releases/1",
         "--method",
@@ -116,11 +119,11 @@ def test_promotion_rejection_is_a_blocker(monkeypatch):
         Mock(side_effect=[{"object": {"sha": "a" * 40}}, {"immutable": False, "prerelease": True}]),
     )
     with pytest.raises(ValueError, match="immutable"):
-        publisher.main("promote", "v0.1.0", "a" * 40)
+        publisher.main("promote", "0.1.1", "a" * 40)
 
 
 @pytest.mark.parametrize(
-    "tag, sha", [("main", "a" * 40), ("v0.1.0", "main"), ("v0.1.0; malicious", "a" * 40)]
+    "tag, sha", [("main", "a" * 40), ("0.1.1", "main"), ("0.1.1; malicious", "a" * 40)]
 )
 def test_release_rejects_ambiguous_inputs(tag, sha):
     with pytest.raises(ValueError):
@@ -131,14 +134,14 @@ def test_publication_exact_sha_and_existing_release(monkeypatch):
     monkeypatch.setenv("GITHUB_REPOSITORY", "THEFLDR/HA-IntegrationManager")
     monkeypatch.setattr(publisher, "api", Mock(return_value={"object": {"sha": "b" * 40}}))
     with pytest.raises(ValueError, match="main HEAD"):
-        publisher.main("publish", "v0.1.0", "a" * 40)
+        publisher.main("publish", "0.1.1", "a" * 40)
     monkeypatch.setattr(
         publisher,
         "api",
-        Mock(side_effect=[{"object": {"sha": "a" * 40}}, [{"tag_name": "v0.1.0"}]]),
+        Mock(side_effect=[{"object": {"sha": "a" * 40}}, [{"tag_name": "0.1.1"}]]),
     )
     with pytest.raises(ValueError, match="already exists"):
-        publisher.main("publish", "v0.1.0", "a" * 40)
+        publisher.main("publish", "0.1.1", "a" * 40)
 
 
 def test_verify_release_digest():
@@ -164,6 +167,7 @@ def test_publication_success_is_draft_then_immutable_prerelease(tmp_path, monkey
     data = b"tested artifact"
     (tmp_path / "dist/integrationmanager.zip").write_bytes(data)
     release = {
+        "tag_name": "0.1.1",
         "immutable": True,
         "prerelease": True,
         "assets": [
@@ -182,11 +186,11 @@ def test_publication_success_is_draft_then_immutable_prerelease(tmp_path, monkey
     monkeypatch.setattr(publisher, "tag_target", Mock(return_value=None))
     gh = Mock()
     monkeypatch.setattr(publisher, "gh", gh)
-    publisher.main("publish", "v0.1.0", "a" * 40)
+    publisher.main("publish", "0.1.1", "a" * 40)
     verify.assert_called_once_with("THEFLDR/HA-IntegrationManager", "a" * 40)
     assert "--draft" in gh.call_args_list[0].args
     assert "--prerelease" in gh.call_args_list[0].args
-    assert gh.call_args_list[1].args[:3] == ("release", "edit", "v0.1.0")
+    assert gh.call_args_list[1].args[:3] == ("release", "edit", "0.1.1")
     assert "--draft=false" in gh.call_args_list[1].args
 
 
@@ -198,6 +202,7 @@ def test_initial_publication_with_missing_tag_and_empty_stdout(tmp_path, monkeyp
     monkeypatch.setenv("GITHUB_REPOSITORY", "THEFLDR/HA-IntegrationManager")
     monkeypatch.setattr(publisher, "verify_main_ci", Mock())
     release = {
+        "tag_name": "0.1.1",
         "immutable": True,
         "prerelease": True,
         "assets": [
@@ -220,8 +225,8 @@ def test_initial_publication_with_missing_tag_and_empty_stdout(tmp_path, monkeyp
         ]
     )
     monkeypatch.setattr(publisher, "gh", gh)
-    publisher.main("publish", "v0.1.0", "a" * 40)
-    assert gh.call_args_list[3].args[:3] == ("release", "create", "v0.1.0")
+    publisher.main("publish", "0.1.1", "a" * 40)
+    assert gh.call_args_list[3].args[:3] == ("release", "create", "0.1.1")
     assert "--target" in gh.call_args_list[3].args
     assert "a" * 40 in gh.call_args_list[3].args
 
@@ -233,7 +238,7 @@ def test_tag_lookup_never_treats_other_errors_as_absence(monkeypatch, stderr):
     error = subprocess.CalledProcessError(1, ["gh", "api"], output="", stderr=stderr)
     monkeypatch.setattr(publisher, "gh", Mock(side_effect=error))
     with pytest.raises(subprocess.CalledProcessError) as raised:
-        publisher.tag_target("THEFLDR/HA-IntegrationManager", "v0.1.0", missing_ok=True)
+        publisher.tag_target("THEFLDR/HA-IntegrationManager", "0.1.1", missing_ok=True)
     assert raised.value is error
 
 
@@ -246,7 +251,7 @@ def test_missing_tag_still_fails_promotion_and_cli_captures_stderr(monkeypatch):
     )
     monkeypatch.setattr(publisher.subprocess, "check_output", run)
     with pytest.raises(subprocess.CalledProcessError):
-        publisher.tag_target("THEFLDR/HA-IntegrationManager", "v0.1.0")
+        publisher.tag_target("THEFLDR/HA-IntegrationManager", "0.1.1")
     assert run.call_args.kwargs["stderr"] == subprocess.PIPE
 
 
@@ -257,7 +262,7 @@ def test_missing_tag_still_fails_promotion_and_cli_captures_stderr(monkeypatch):
         [
             {
                 "head_sha": "a" * 40,
-                "head_branch": "CODEX/0.1.0",
+                "head_branch": "CODEX/0.1.1",
                 "event": "pull_request",
                 "conclusion": "success",
             }
@@ -275,7 +280,7 @@ def test_changed_promotion_artifacts_rejected(monkeypatch):
     monkeypatch.setenv("GITHUB_REPOSITORY", "THEFLDR/HA-IntegrationManager")
     before = {
         "id": 1,
-        "tag_name": "v0.1.0",
+        "tag_name": "0.1.1",
         "immutable": True,
         "prerelease": True,
         "assets": [{"id": 42, "name": "integrationmanager.zip", "size": 2, "digest": "sha256:old"}],
@@ -291,4 +296,4 @@ def test_changed_promotion_artifacts_rejected(monkeypatch):
     monkeypatch.setattr(publisher, "tag_target", Mock(return_value="a" * 40))
     monkeypatch.setattr(publisher, "verify_main_ci", Mock())
     with pytest.raises(ValueError, match="assets changed"):
-        publisher.main("promote", "v0.1.0", "a" * 40)
+        publisher.main("promote", "0.1.1", "a" * 40)
