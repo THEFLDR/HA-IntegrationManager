@@ -1,4 +1,4 @@
-name: CI - Validation
+name: CI
 
 on:
   push:

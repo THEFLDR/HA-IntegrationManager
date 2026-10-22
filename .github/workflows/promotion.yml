@@ -1,4 +1,4 @@
-name: Release - Promotion
+name: Promotion
 
 on:
   workflow_dispatch:
