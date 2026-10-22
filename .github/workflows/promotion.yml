@@ -1,0 +1,57 @@
+name: Release - Promotion
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Immutable prerelease tag tested in Sandbox
+        type: string
+        required: true
+      sha:
+        description: Exact merged main SHA of that tag
+        type: string
+        required: true
+      sandbox_tested:
+        description: I tested this exact artifact in Sandbox
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integrationmanager-release
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    name: Owner initiation
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          ACTOR: ${{ github.actor }}
+          REF: ${{ github.ref }}
+          TESTED: ${{ inputs.sandbox_tested }}
+        run: test "$ACTOR" = THEFLDR && test "$REF" = refs/heads/main && test "$TESTED" = true
+  promote:
+    name: Release - Promotion
+    needs: authorize
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Promote metadata only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ inputs.sha }}
+        run: python scripts/release.py promote "$TAG" "$SHA"
