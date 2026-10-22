@@ -37,12 +37,15 @@ def test_workflow_names_permissions_and_no_automatic_publication():
         name: yaml.safe_load((ROOT / ".github/workflows" / name).read_text())
         for name in ("ci.yml", "release.yml", "promotion.yml")
     }
-    assert [w["name"] for w in workflows.values()] == [
-        "CI - Validation",
-        "Release - Publication",
-        "Release - Promotion",
-    ]
-    assert [j["name"] for j in workflows["ci.yml"]["jobs"].values()] == ["CI - Validation"]
+    assert [w["name"] for w in workflows.values()] == ["Validation", "Publication", "Promotion"]
+    assert {
+        name: {job_id: job["name"] for job_id, job in workflow["jobs"].items()}
+        for name, workflow in workflows.items()
+    } == {
+        "ci.yml": {"validation": "Validation"},
+        "release.yml": {"authorize": "Owner initiation", "publish": "Publication"},
+        "promotion.yml": {"authorize": "Owner initiation", "promote": "Promotion"},
+    }
     assert "github/codeql-action" not in (ROOT / ".github/workflows/ci.yml").read_text()
     for name, data in workflows.items():
         assert data["permissions"] == {"contents": "read"}
