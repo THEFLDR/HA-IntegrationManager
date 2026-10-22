@@ -35,7 +35,7 @@ jobs:
           TESTED: ${{ inputs.sandbox_tested }}
         run: test "$ACTOR" = THEFLDR && test "$REF" = refs/heads/main && test "$TESTED" = true
   promote:
-    name: Release - Promotion
+    name: Promotion
     needs: authorize
     runs-on: ubuntu-latest
     permissions:

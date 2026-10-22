@@ -29,7 +29,7 @@ jobs:
           REF: ${{ github.ref }}
         run: test "$ACTOR" = THEFLDR && test "$REF" = refs/heads/main
   publish:
-    name: Release - Publication
+    name: Release
     needs: authorize
     runs-on: ubuntu-latest
     permissions:

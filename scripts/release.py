@@ -36,7 +36,7 @@ def verify_main_ci(repo, sha):
         and run.get("conclusion") == "success"
         for run in result["workflow_runs"]
     ):
-        raise ValueError("Successful CI - Validation on the exact merged main SHA is required")
+        raise ValueError("Successful CI on the exact merged main SHA is required")
 
 
 def tag_target(repo, tag, missing_ok=False):
