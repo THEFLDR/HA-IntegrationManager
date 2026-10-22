@@ -6,6 +6,7 @@ on:
   pull_request:
     branches: [main]
 
+# CodeQL uses the repository's existing GitHub default setup.
 permissions:
   contents: read
 
@@ -13,8 +14,6 @@ jobs:
   validation:
     name: CI - Validation
     runs-on: ubuntu-latest
-    outputs:
-      code: ${{ steps.changes.outputs.code }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -73,27 +72,3 @@ jobs:
         run: |
           pip-audit --strict -r requirements-runtime.txt
           npm audit --audit-level=high
-  codeql:
-    name: CI - CodeQL
-    needs: validation
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-      actions: read
-    steps:
-      - name: Documentation-only check
-        if: needs.validation.outputs.code == 'false'
-        run: echo 'No executable changes to scan'
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        if: needs.validation.outputs.code == 'true'
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - uses: github/codeql-action/init@793b778da9c9275a0f276522b27cb5fc14bba279 # v4
-        if: needs.validation.outputs.code == 'true'
-        with:
-          languages: python,javascript-typescript
-          build-mode: none
-      - uses: github/codeql-action/analyze@793b778da9c9275a0f276522b27cb5fc14bba279 # v4
-        if: needs.validation.outputs.code == 'true'

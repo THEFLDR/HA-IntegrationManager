@@ -34,10 +34,8 @@ def test_workflow_names_permissions_and_no_automatic_publication():
         "Release - Publication",
         "Release - Promotion",
     ]
-    assert [j["name"] for j in workflows["ci.yml"]["jobs"].values()] == [
-        "CI - Validation",
-        "CI - CodeQL",
-    ]
+    assert [j["name"] for j in workflows["ci.yml"]["jobs"].values()] == ["CI - Validation"]
+    assert "github/codeql-action" not in (ROOT / ".github/workflows/ci.yml").read_text()
     for name, data in workflows.items():
         assert data["permissions"] == {"contents": "read"}
         events = data.get("on", data.get(True))  # YAML 1.1 treats 'on' as boolean.
