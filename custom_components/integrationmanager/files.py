@@ -18,6 +18,10 @@ from .const import MAX_ARCHIVE, MAX_FILES, MAX_UNPACKED
 class InstallError(Exception):
     """An artifact or filesystem operation was rejected."""
 
+    def __init__(self, message, *, files_changed=False):
+        super().__init__(message)
+        self.files_changed = files_changed
+
 
 def validate_archive(data: bytes, domain: str, version: str, ha_version: str) -> dict:
     """Validate everything in memory before writing anything to disk."""
@@ -116,8 +120,8 @@ class FileStore:
         stage = Path(tempfile.mkdtemp(prefix=".integrationmanager-", dir=self.root))
         backup = stage / "previous"
         prepared = stage / "prepared"
-        prepared.mkdir()
         try:
+            prepared.mkdir()
             for name, content in files.items():
                 path = prepared / name
                 if path.resolve().is_relative_to(prepared.resolve()) is False:
@@ -126,18 +130,32 @@ class FileStore:
                 path.write_bytes(content)
             if dest.exists():
                 os.replace(dest, backup)
-            try:
-                os.replace(prepared, dest)
-            except OSError:
-                if backup.exists():
+            os.replace(prepared, dest)
+        except (OSError, InstallError) as err:
+            if backup.exists():
+                try:
                     os.replace(backup, dest)
-                raise
+                except OSError as rollback_error:
+                    # Never delete the old integration if rollback failed,
+                    # even when another directory now exists at destination.
+                    raise InstallError(
+                        f"Installation and rollback failed; recover previous files from {backup}",
+                        files_changed=True,
+                    ) from rollback_error
+            try:
+                shutil.rmtree(stage)
+            except OSError as cleanup_error:
+                raise InstallError(
+                    f"Installation failed ({err}); staging cleanup failed; inspect {stage}"
+                ) from cleanup_error
+            raise InstallError(f"Installation failed: {err}") from err
+        try:
+            shutil.rmtree(stage)
         except OSError as err:
-            # Keep a recoverable backup if rollback itself failed.
-            raise InstallError(f"Installation failed; inspect {stage.name} for recovery") from err
-        finally:
-            if not backup.exists() or dest.exists():
-                shutil.rmtree(stage, ignore_errors=True)
+            raise InstallError(
+                f"Integration files replaced but staging cleanup failed; inspect {stage}",
+                files_changed=True,
+            ) from err
 
     def remove(self, domain: str):
         dest = self.destination(domain)
@@ -147,7 +165,18 @@ class FileStore:
         try:
             os.replace(dest, stage / domain)
         except OSError as err:
-            stage.rmdir()
+            try:
+                stage.rmdir()
+            except OSError as cleanup_error:
+                raise InstallError(
+                    f"Unable to remove integration files ({err}); staging cleanup failed: {stage}"
+                ) from cleanup_error
             raise InstallError("Unable to remove integration files") from err
         # Only files in the validated integration directory, never .storage or data.
-        shutil.rmtree(stage, ignore_errors=True)
+        try:
+            shutil.rmtree(stage)
+        except OSError as err:
+            raise InstallError(
+                f"Integration deletion failed; remaining files need recovery or cleanup at {stage}",
+                files_changed=True,
+            ) from err

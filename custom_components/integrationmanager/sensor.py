@@ -48,4 +48,7 @@ class ChannelSensor(SensorEntity):
 
     @property
     def extra_state_attributes(self):
-        return {"effective_channel": self.runtime.channel, "source": "global"}
+        return {
+            "effective_channel": self.runtime.channel,
+            "source": "override" if "channel" in self.runtime.entry.options else "default",
+        }

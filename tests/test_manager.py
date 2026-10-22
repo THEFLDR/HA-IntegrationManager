@@ -129,8 +129,57 @@ async def test_cleanup_no_entries_and_restart(runtime):
     runtime.hass.config_entries.async_entries.return_value = [SimpleNamespace(entry_id="owned")]
     runtime.hass.config_entries.async_remove.return_value = {"require_restart": True}
     runtime._restart_notice = Mock()
-    await runtime.cleanup("sample", "REMOVE sample CONFIGURATION")
-    runtime._restart_notice.assert_called_once()
+    message = await runtime.cleanup("sample", "REMOVE sample CONFIGURATION")
+    runtime._restart_notice.assert_called_once_with(configuration_removed=True)
+    assert "Restart Home Assistant" in message
+
+
+@pytest.mark.parametrize("result", [None, False, {}, {"error": "failed", "require_restart": False}])
+async def test_cleanup_does_not_claim_success_without_ha_confirmation(runtime, result):
+    runtime.installed = AsyncMock(return_value=[{"domain": "sample"}])
+    runtime.hass.config_entries.async_entries.return_value = [SimpleNamespace(entry_id="owned")]
+    runtime.hass.config_entries.async_remove.return_value = result
+    with pytest.raises(InstallError, match="cleanup incomplete: 0/1.*owned"):
+        await runtime.cleanup("sample", "REMOVE sample CONFIGURATION")
+
+
+async def test_partial_cleanup_reports_progress_and_preserves_restart(runtime):
+    runtime.installed = AsyncMock(return_value=[{"domain": "sample"}])
+    runtime.hass.config_entries.async_entries.return_value = [
+        SimpleNamespace(entry_id="first"),
+        SimpleNamespace(entry_id="second"),
+    ]
+    runtime.hass.config_entries.async_remove.side_effect = [
+        {"require_restart": True},
+        OSError("removal hook failed"),
+    ]
+    runtime._restart_notice = Mock(
+        side_effect=lambda **kw: setattr(runtime, "restart_required", True)
+    )
+    with pytest.raises(InstallError, match="cleanup incomplete: 1/2.*second.*removal hook failed"):
+        await runtime.cleanup("sample", "REMOVE sample CONFIGURATION")
+    assert runtime.restart_required
+    assert not runtime.lock.locked()
+
+
+@pytest.mark.parametrize("changed", [False, True])
+async def test_failed_file_change_reports_failure_and_tracks_changed_files(runtime, changed):
+    runtime.store.remove = Mock(side_effect=InstallError("inspect staging", files_changed=changed))
+    runtime._restart_notice = Mock(side_effect=lambda: setattr(runtime, "restart_required", True))
+    with pytest.raises(InstallError, match="inspect staging"):
+        await runtime.remove("sample")
+    assert runtime.restart_required is changed
+    assert runtime.pending_domains == ({"sample"} if changed else set())
+    assert not runtime.lock.locked()
+
+
+async def test_cleanup_notification_does_not_claim_configuration_preserved(runtime, monkeypatch):
+    notify = Mock()
+    monkeypatch.setattr("homeassistant.components.persistent_notification.async_create", notify)
+    runtime._restart_notice(configuration_removed=True)
+    assert runtime.restart_required
+    assert "configuration entries were removed" in notify.call_args.args[1]
+    assert "preserved" not in notify.call_args.args[1]
 
 
 async def test_dashboard_survives_catalog_failure(runtime, monkeypatch):

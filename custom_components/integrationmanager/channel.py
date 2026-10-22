@@ -27,5 +27,5 @@ def resolve_channel(hass, override: str | None = None) -> dict[str, str]:
     return {
         "state": "Managed" if channel else "Stable",
         "effective_channel": channel or STABLE,
-        "source": "manager" if channel else "default",
+        "source": "managed" if channel else "default",
     }

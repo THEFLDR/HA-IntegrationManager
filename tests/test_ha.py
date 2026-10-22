@@ -85,7 +85,7 @@ async def test_registry_discovery_including_unlisted(hass, tmp_path, monkeypatch
     hass.states.async_set(update.entity_id, "on", {"installed_version": "0.1.0"})
     hass.states.async_set(health.entity_id, "off")
     hass.states.async_set(
-        channel.entity_id, "Managed", {"source": "manager", "effective_channel": RC}
+        channel.entity_id, "Managed", {"source": "managed", "effective_channel": RC}
     )
     result = await overview(
         hass, store, [CatalogEntry("Catalog Friendly", "THEFLDR/Repo", "sample")]
@@ -155,9 +155,13 @@ async def test_native_entities_and_update_errors(hass, runtime):
     sensor = add.call_args.args[0][0]
     assert isinstance(sensor, ChannelSensor)
     assert sensor.native_value == "Stable"
+    assert sensor.extra_state_attributes == {"source": "default", "effective_channel": STABLE}
     runtime.entry.options["channel"] = RC
     assert sensor.native_value == "Release Candidate"
-    assert sensor.extra_state_attributes == {"source": "global", "effective_channel": RC}
+    assert sensor.extra_state_attributes == {"source": "override", "effective_channel": RC}
+    runtime.entry.options["channel"] = STABLE
+    assert sensor.extra_state_attributes == {"source": "override", "effective_channel": STABLE}
+    runtime.entry.options["channel"] = RC
     await setup_update(hass, runtime.entry, add)
     entity = add.call_args.args[0][0]
     assert isinstance(entity, ManagerUpdate)
@@ -266,3 +270,44 @@ async def test_websocket_commands(hass, runtime, monkeypatch):
     runtime.restart_required = True
     await handle(hass, connection, {"id": 3, "action": "channel", "channel": RC})
     assert connection.send_error.call_args.args[1] == "operation_failed"
+
+
+async def test_websocket_cleanup_reports_updated_restart_state(hass, runtime):
+    hass.data[DOMAIN] = runtime
+    runtime.installed = AsyncMock(return_value=[{"domain": "sample"}])
+    runtime.hass.config_entries.async_entries.return_value = [SimpleNamespace(entry_id="owned")]
+    runtime.hass.config_entries.async_remove.return_value = {"require_restart": True}
+    runtime._restart_notice = Mock(
+        side_effect=lambda **kw: setattr(runtime, "restart_required", True)
+    )
+    connection = SimpleNamespace(
+        user=SimpleNamespace(is_admin=True), send_result=Mock(), send_error=Mock()
+    )
+    await command.__wrapped__(
+        hass,
+        connection,
+        {
+            "id": 1,
+            "action": "cleanup",
+            "domain": "sample",
+            "confirmation": "REMOVE sample CONFIGURATION",
+        },
+    )
+    connection.send_error.assert_not_called()
+    result = connection.send_result.call_args.args[1]
+    assert result["restart_required"] is True
+    assert "Restart Home Assistant" in result["message"]
+    connection.send_result.reset_mock()
+    runtime.hass.config_entries.async_remove.return_value = False
+    await command.__wrapped__(
+        hass,
+        connection,
+        {
+            "id": 2,
+            "action": "cleanup",
+            "domain": "sample",
+            "confirmation": "REMOVE sample CONFIGURATION",
+        },
+    )
+    connection.send_result.assert_not_called()
+    assert "cleanup incomplete" in connection.send_error.call_args.args[2]

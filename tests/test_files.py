@@ -1,8 +1,10 @@
 import io
 import os
+import shutil
 import stat
 import zipfile
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -156,3 +158,108 @@ def test_symlink_destinations(tmp_path):
         store.destination("sample")
     with pytest.raises(InstallError):
         store.destination("../escape")
+
+
+@pytest.mark.parametrize("failure", ["prepare", "write", "backup", "activate"])
+def test_install_failures_restore_old_files_and_clean_staging(tmp_path, monkeypatch, failure):
+    store = FileStore(str(tmp_path))
+    store.install("sample", {"file": b"old"})
+    mkdir, write, replace = Path.mkdir, Path.write_bytes, os.replace
+
+    def fail_mkdir(path, *args, **kwargs):
+        if failure == "prepare" and path.name == "prepared":
+            raise OSError("cannot prepare")
+        return mkdir(path, *args, **kwargs)
+
+    def fail_write(path, *args, **kwargs):
+        if failure == "write":
+            raise OSError("cannot write")
+        return write(path, *args, **kwargs)
+
+    def fail_replace(source, destination):
+        if (failure == "backup" and Path(source).name == "sample") or (
+            failure == "activate" and Path(source).name == "prepared"
+        ):
+            raise OSError("cannot move")
+        return replace(source, destination)
+
+    monkeypatch.setattr(Path, "mkdir", fail_mkdir)
+    monkeypatch.setattr(Path, "write_bytes", fail_write)
+    monkeypatch.setattr(os, "replace", fail_replace)
+    with pytest.raises(InstallError) as raised:
+        store.install("sample", {"file": b"new"}, True)
+    assert not raised.value.files_changed
+    assert (store.root / "sample/file").read_bytes() == b"old"
+    assert list(store.root.iterdir()) == [store.root / "sample"]
+
+
+@pytest.mark.parametrize("destination_exists", [False, True])
+def test_rollback_failure_always_preserves_backup(tmp_path, monkeypatch, destination_exists):
+    store = FileStore(str(tmp_path))
+    store.install("sample", {"file": b"old"})
+    replace = os.replace
+
+    def fail_activate_and_rollback(source, destination):
+        if Path(source).name == "prepared":
+            if destination_exists:
+                Path(destination).mkdir()
+                (Path(destination) / "unexpected").write_bytes(b"external file")
+            raise OSError("activation failed")
+        if Path(source).name == "previous":
+            raise OSError("rollback failed")
+        return replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", fail_activate_and_rollback)
+    with pytest.raises(InstallError, match="rollback failed") as raised:
+        store.install("sample", {"file": b"new"}, True)
+    stage = next(store.root.glob(".integrationmanager-*"))
+    assert (stage / "previous/file").read_bytes() == b"old"
+    assert str(stage / "previous") in str(raised.value)
+    assert raised.value.files_changed
+
+
+@pytest.mark.parametrize("operation", ["install", "remove"])
+def test_cleanup_failure_reports_recovery_path(tmp_path, monkeypatch, operation):
+    store = FileStore(str(tmp_path))
+    store.install("sample", {"file": b"old", "other": b"remaining"})
+
+    def partial_delete(stage):
+        (stage / ("sample" if operation == "remove" else "previous") / "file").unlink()
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(shutil, "rmtree", partial_delete)
+    with pytest.raises(InstallError) as raised:
+        if operation == "remove":
+            store.remove("sample")
+        else:
+            store.install("sample", {"file": b"new"}, True)
+    stage = next(store.root.glob(".integrationmanager-*"))
+    assert str(stage) in str(raised.value)
+    assert raised.value.files_changed
+    assert (stage / ("sample" if operation == "remove" else "previous") / "other").exists()
+
+
+def test_remove_move_and_cleanup_failure_are_reported(tmp_path, monkeypatch):
+    store = FileStore(str(tmp_path))
+    store.install("sample", {"file": b"old"})
+    monkeypatch.setattr(os, "replace", Mock(side_effect=OSError("move failed")))
+    with pytest.raises(InstallError, match="Unable to remove"):
+        store.remove("sample")
+    assert list(store.root.iterdir()) == [store.root / "sample"]
+    monkeypatch.setattr(Path, "rmdir", Mock(side_effect=OSError("cleanup failed")))
+    with pytest.raises(InstallError, match="staging cleanup failed") as raised:
+        store.remove("sample")
+    assert str(next(store.root.glob(".integrationmanager-*"))) in str(raised.value)
+    assert (store.root / "sample/file").read_bytes() == b"old"
+
+
+def test_failed_staging_cleanup_does_not_hide_install_failure(tmp_path, monkeypatch):
+    store = FileStore(str(tmp_path))
+    store.install("sample", {"file": b"old"})
+    monkeypatch.setattr(Path, "write_bytes", Mock(side_effect=OSError("disk full")))
+    monkeypatch.setattr(shutil, "rmtree", Mock(side_effect=OSError("permission denied")))
+    with pytest.raises(InstallError, match="disk full.*staging cleanup failed") as raised:
+        store.install("sample", {"file": b"new"}, True)
+    assert not raised.value.files_changed
+    assert (store.root / "sample/file").read_bytes() == b"old"
+    assert str(next(store.root.glob(".integrationmanager-*"))) in str(raised.value)

@@ -14,7 +14,9 @@ def gh(*arguments):
     executable = shutil.which("gh")
     if executable is None:
         raise RuntimeError("GitHub CLI is required")
-    return subprocess.check_output([executable, *arguments], text=True)  # noqa: S603
+    return subprocess.check_output(  # noqa: S603
+        [executable, *arguments], text=True, stderr=subprocess.PIPE
+    )
 
 
 def api(path, *arguments):
@@ -39,7 +41,9 @@ def tag_target(repo, tag, missing_ok=False):
     try:
         ref = api(f"repos/{repo}/git/ref/tags/{tag}")["object"]
     except subprocess.CalledProcessError as err:
-        if missing_ok and json.loads(err.output).get("message") == "Not Found":
+        # gh can emit no stdout on API errors. Only an explicit HTTP 404 is
+        # absence; authentication, transport and server failures must abort.
+        if missing_ok and re.search(r"\(HTTP 404\)", err.stderr or ""):
             return None
         raise
     if ref["type"] == "tag":

@@ -52,6 +52,7 @@ async def command(hass, connection, msg):
             hass.config_entries.async_update_entry(
                 runtime.entry, options={**runtime.entry.options, "channel": msg["channel"]}
             )
+        result["restart_required"] = runtime.restart_required
         connection.send_result(msg["id"], result)
     except (InstallError, GitHubError, HomeAssistantError, ValueError, KeyError, OSError) as err:
         connection.send_error(msg["id"], "operation_failed", str(err))

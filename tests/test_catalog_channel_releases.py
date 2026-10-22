@@ -75,7 +75,7 @@ def test_channel_lifecycle(global_channel, override):
     hass.data[DOMAIN] = SimpleNamespace(entry=SimpleNamespace(options={"channel": global_channel}))
     result = resolve_channel(hass, intent)
     assert result["effective_channel"] == (override or global_channel)
-    assert result["source"] == ("override" if override else "manager")
+    assert result["source"] == ("override" if override else "managed")
     assert result["state"] == (
         {STABLE: "Stable", RC: "Release Candidate"}[override] if override else "Managed"
     )
@@ -83,6 +83,9 @@ def test_channel_lifecycle(global_channel, override):
     assert resolve_channel(hass, intent)["effective_channel"] == (override or STABLE)
     assert resolve_channel(hass, intent)["source"] == ("override" if override else "default")
     assert intent == override
+    # Restoring Manager reuses its option without overwriting explicit intent.
+    hass.data[DOMAIN] = SimpleNamespace(entry=SimpleNamespace(options={"channel": global_channel}))
+    assert resolve_channel(hass, intent) == result
 
 
 def test_invalid_channel():

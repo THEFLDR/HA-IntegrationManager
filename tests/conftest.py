@@ -8,11 +8,16 @@ import pytest
 import pytest_asyncio
 from homeassistant import loader
 from homeassistant.config_entries import ConfigEntries
+from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.integrationmanager.const import DOMAIN
+
+
+def pytest_report_header():
+    return f"Home Assistant Core under test: {HA_VERSION}"
 
 
 @pytest.fixture
@@ -60,8 +65,9 @@ async def hass(tmp_path):
     loader.async_setup(instance)
     instance.config_entries = ConfigEntries(instance, {})
     await instance.config_entries.async_initialize()
-    await er.async_load(instance)
+    dr.async_setup(instance)
     await dr.async_load(instance)
+    await er.async_load(instance)
     yield instance
     await instance.async_stop(force=True)
 

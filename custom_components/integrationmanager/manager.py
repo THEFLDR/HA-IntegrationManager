@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import asdict
 
 from homeassistant.const import __version__ as HA_VERSION
+from homeassistant.exceptions import HomeAssistantError
 
 from .const import DOMAIN, REPOSITORY, STABLE, VERSION
 from .files import InstallError, validate_archive
@@ -82,25 +83,37 @@ class Manager:
     async def _change_files(self, domain, operation, *args):
         # Executor work continues after its caller is cancelled. Keep the lock
         # until it has completed and still report the restart requirement.
-        job = asyncio.ensure_future(self.hass.async_add_executor_job(operation, *args))
+        job = asyncio.ensure_future(self._run_file_change(domain, operation, *args))
         try:
             await asyncio.shield(job)
         except asyncio.CancelledError:
             await job
-            self.pending_domains.add(domain)
-            self._restart_notice()
+            raise
+
+    async def _run_file_change(self, domain, operation, *args):
+        try:
+            await self.hass.async_add_executor_job(operation, *args)
+        except InstallError as err:
+            if err.files_changed:
+                self.pending_domains.add(domain)
+                self._restart_notice()
             raise
         self.pending_domains.add(domain)
         self._restart_notice()
 
-    def _restart_notice(self):
+    def _restart_notice(self, *, configuration_removed=False):
         from homeassistant.components import persistent_notification
 
         self.restart_required = True
         persistent_notification.async_create(
             self.hass,
-            "Integration files changed. Restart Home Assistant manually to apply them. "
-            "Configuration and data have been preserved.",
+            (
+                "HA configuration entries were removed. Restart Home Assistant manually "
+                "to finish unloading the integration."
+                if configuration_removed
+                else "Integration files changed. Restart Home Assistant manually to apply them. "
+                "Configuration and data have been preserved."
+            ),
             "Integration Manager: restart required",
             f"{DOMAIN}_restart",
         )
@@ -125,8 +138,30 @@ class Manager:
                 raise InstallError(
                     "No integration-owned HA configuration entries; no data was deleted"
                 )
+            removed = 0
+            restart = False
             for entry in entries:
-                result = await self.hass.config_entries.async_remove(entry.entry_id)
-                if result.get("require_restart"):
-                    self._restart_notice()
-            return "HA configuration entries removed. Shared files, YAML, backups and uncertain data were not deleted. Integration removal hooks control their own data cleanup."
+                try:
+                    result = await self.hass.config_entries.async_remove(entry.entry_id)
+                    if (
+                        not isinstance(result, dict)
+                        or type(result.get("require_restart")) is not bool
+                        or result.get("error")
+                    ):
+                        raise InstallError("HA did not confirm configuration entry removal")
+                except (HomeAssistantError, OSError, ValueError, KeyError, InstallError) as err:
+                    raise InstallError(
+                        f"Configuration cleanup incomplete: {removed}/{len(entries)} entries "
+                        f"confirmed removed; failed at {entry.entry_id}: {err}. "
+                        "Inspect HA configuration before retrying."
+                    ) from err
+                removed += 1
+                if result["require_restart"]:
+                    restart = True
+                    self._restart_notice(configuration_removed=True)
+            return (
+                "HA configuration entries removed. "
+                + ("Restart Home Assistant manually to finish unloading. " if restart else "")
+                + "Shared files, YAML, backups and uncertain data were not deleted. "
+                "Integration removal hooks control their own data cleanup."
+            )

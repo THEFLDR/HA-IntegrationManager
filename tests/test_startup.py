@@ -7,6 +7,7 @@ import aiohttp
 import pytest
 from homeassistant import bootstrap, loader
 from homeassistant.auth.const import GROUP_ID_ADMIN
+from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant
 
 from custom_components.integrationmanager.const import DOMAIN
@@ -30,9 +31,7 @@ async def test_actual_home_assistant_startup(tmp_path, monkeypatch, offline):
     )
     instance = HomeAssistant(str(tmp_path))
     package = build(tmp_path / "package").read_bytes()
-    FileStore(str(tmp_path)).install(
-        DOMAIN, validate_archive(package, DOMAIN, "0.1.0", "2025.12.5")
-    )
+    FileStore(str(tmp_path)).install(DOMAIN, validate_archive(package, DOMAIN, "0.1.0", HA_VERSION))
     instance.config.skip_pip = True
     loader.async_setup(instance)
     with socket.socket() as reservation:
@@ -76,7 +75,6 @@ async def test_actual_home_assistant_startup(tmp_path, monkeypatch, offline):
         ]
         assert len(channel) == 1 and channel[0].state == "Stable"
         await instance.async_start()
-        port = instance.http.site._server.sockets[0].getsockname()[1]
         async with aiohttp.ClientSession() as session:
             async with session.get(f"http://127.0.0.1:{port}/{DOMAIN}_static/panel.js") as response:
                 assert response.status == 200

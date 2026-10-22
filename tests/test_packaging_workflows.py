@@ -1,11 +1,13 @@
 import hashlib
 import json
+import subprocess
+import zipfile
 from unittest.mock import Mock
 
 import pytest
 import yaml
 
-from custom_components.integrationmanager.const import DOMAIN
+from custom_components.integrationmanager.const import DOMAIN, MIN_HA_VERSION
 from custom_components.integrationmanager.files import validate_archive
 from scripts import release as publisher
 from scripts.package import ROOT, build
@@ -15,7 +17,13 @@ def test_package_deterministic_and_installable(tmp_path):
     artifact = build(tmp_path, "v0.1.0")
     first = artifact.read_bytes()
     assert build(tmp_path, "v0.1.0").read_bytes() == first
-    files = validate_archive(first, DOMAIN, "0.1.0", "2025.12.5")
+    assert MIN_HA_VERSION == "2025.12.0"
+    files = validate_archive(first, DOMAIN, "0.1.0", MIN_HA_VERSION)
+    with zipfile.ZipFile(artifact) as archive:
+        assert (
+            json.loads(archive.read("release.json"))["minimum_home_assistant_version"]
+            == MIN_HA_VERSION
+        )
     assert files["frontend/icon.png"] == (ROOT / "approved-icon.png").read_bytes()
     assert "frontend/panel.js" in files
     assert all("__pycache__" not in f for f in files)
@@ -180,6 +188,66 @@ def test_publication_success_is_draft_then_immutable_prerelease(tmp_path, monkey
     assert "--prerelease" in gh.call_args_list[0].args
     assert gh.call_args_list[1].args[:3] == ("release", "edit", "v0.1.0")
     assert "--draft=false" in gh.call_args_list[1].args
+
+
+def test_initial_publication_with_missing_tag_and_empty_stdout(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "dist").mkdir()
+    data = b"artifact"
+    (tmp_path / "dist/integrationmanager.zip").write_bytes(data)
+    monkeypatch.setenv("GITHUB_REPOSITORY", "THEFLDR/HA-IntegrationManager")
+    monkeypatch.setattr(publisher, "verify_main_ci", Mock())
+    release = {
+        "immutable": True,
+        "prerelease": True,
+        "assets": [
+            {
+                "name": "integrationmanager.zip",
+                "digest": f"sha256:{hashlib.sha256(data).hexdigest()}",
+            }
+        ],
+    }
+    gh = Mock(
+        side_effect=[
+            json.dumps({"object": {"sha": "a" * 40}}),
+            "[]",
+            subprocess.CalledProcessError(
+                1, ["gh", "api"], output="", stderr="gh: Not Found (HTTP 404)\n"
+            ),
+            "",
+            "",
+            json.dumps(release),
+        ]
+    )
+    monkeypatch.setattr(publisher, "gh", gh)
+    publisher.main("publish", "v0.1.0", "a" * 40)
+    assert gh.call_args_list[3].args[:3] == ("release", "create", "v0.1.0")
+    assert "--target" in gh.call_args_list[3].args
+    assert "a" * 40 in gh.call_args_list[3].args
+
+
+@pytest.mark.parametrize(
+    "stderr", ["gh: Forbidden (HTTP 403)", "gh: server error (HTTP 500)", "transport failed"]
+)
+def test_tag_lookup_never_treats_other_errors_as_absence(monkeypatch, stderr):
+    error = subprocess.CalledProcessError(1, ["gh", "api"], output="", stderr=stderr)
+    monkeypatch.setattr(publisher, "gh", Mock(side_effect=error))
+    with pytest.raises(subprocess.CalledProcessError) as raised:
+        publisher.tag_target("THEFLDR/HA-IntegrationManager", "v0.1.0", missing_ok=True)
+    assert raised.value is error
+
+
+def test_missing_tag_still_fails_promotion_and_cli_captures_stderr(monkeypatch):
+    monkeypatch.setattr(publisher.shutil, "which", Mock(return_value="/usr/bin/gh"))
+    run = Mock(
+        side_effect=subprocess.CalledProcessError(
+            1, ["gh", "api"], output="", stderr="gh: Not Found (HTTP 404)"
+        )
+    )
+    monkeypatch.setattr(publisher.subprocess, "check_output", run)
+    with pytest.raises(subprocess.CalledProcessError):
+        publisher.tag_target("THEFLDR/HA-IntegrationManager", "v0.1.0")
+    assert run.call_args.kwargs["stderr"] == subprocess.PIPE
 
 
 @pytest.mark.parametrize(
