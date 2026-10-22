@@ -13,7 +13,7 @@ from custom_components.integrationmanager.github import GitHubError
 
 def prepare(runtime, archive, release_payload, domain="sample", version="0.2.0"):
     data = archive(domain, version)
-    payload = release_payload(f"v{version}")
+    payload = release_payload(version)
     payload["assets"] = [
         {
             "name": f"{domain}.zip",
@@ -84,6 +84,25 @@ async def test_native_self_update(runtime, archive, release_payload):
     assert (runtime.store.root / DOMAIN / "manifest.json").exists()
     assert runtime.restart_required
     assert DOMAIN in runtime.pending_domains
+
+
+async def test_self_update_from_0_1_0_to_0_1_1(runtime, archive, release_payload, monkeypatch):
+    import json
+
+    monkeypatch.setattr("custom_components.integrationmanager.manager.VERSION", "0.1.0")
+    prepare(runtime, archive, release_payload, DOMAIN, "0.1.1")
+    runtime.store.install(DOMAIN, {"__init__.py": b"old"})
+    await runtime.self_update("0.1.1")
+    manifest = json.loads((runtime.store.root / DOMAIN / "manifest.json").read_text())
+    assert manifest["version"] == "0.1.1"
+    assert runtime.restart_required and DOMAIN in runtime.pending_domains
+
+
+async def test_self_update_rejects_prefixed_requested_version(runtime, archive, release_payload):
+    prepare(runtime, archive, release_payload, DOMAIN)
+    with pytest.raises(InstallError, match="Requested version"):
+        await runtime.self_update("v0.2.0")
+    runtime.client.download.assert_not_called()
 
 
 async def test_no_update_and_unmatched_request(runtime, archive, release_payload):

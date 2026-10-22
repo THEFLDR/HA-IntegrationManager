@@ -3,11 +3,10 @@
 import re
 from dataclasses import dataclass
 
-from packaging.version import InvalidVersion, Version
+from packaging.version import Version
 
 from .const import MAX_ARCHIVE, RC, STABLE
-
-TAG = re.compile(r"v?\d+\.\d+\.\d+(?:(?:-?rc\.?)([1-9]\d*))?\Z", re.I)
+from .version import is_release_version
 
 
 @dataclass(frozen=True)
@@ -22,10 +21,10 @@ class Release:
 
 
 def select_release(items: list, domain: str, channel: str) -> Release | None:
-    """Stable excludes prereleases; RC accepts final and recognized RC tags.
+    """Stable excludes prereleases; RC also accepts GitHub prereleases.
 
-    A final version marked GitHub prerelease is the initial RC publication,
-    allowing promotion of that same immutable tag and asset to Stable.
+    Both use X.Y.Z tags. Prerelease status is release metadata, allowing
+    promotion of that same immutable tag and asset to Stable.
     """
     if channel not in (STABLE, RC):
         raise ValueError("Invalid release channel")
@@ -39,10 +38,9 @@ def select_release(items: list, domain: str, channel: str) -> Release | None:
         ):
             continue
         tag = item.get("tag_name", "")
-        if not isinstance(tag, str) or len(tag) > 100 or not TAG.fullmatch(tag):
+        if not is_release_version(tag):
             continue
-        version = Version(tag)
-        if channel == STABLE and (item.get("prerelease") or version.is_prerelease):
+        if channel == STABLE and item["prerelease"]:
             continue
         raw_assets = item.get("assets", [])
         if not isinstance(raw_assets, list):
@@ -68,7 +66,7 @@ def select_release(items: list, domain: str, channel: str) -> Release | None:
         candidates.append(
             Release(
                 tag,
-                str(version),
+                tag,
                 asset_id,
                 digest.removeprefix("sha256:"),
                 size,
@@ -80,7 +78,6 @@ def select_release(items: list, domain: str, channel: str) -> Release | None:
 
 
 def is_newer(candidate: str, installed: str) -> bool:
-    try:
-        return Version(candidate) > Version(installed)
-    except InvalidVersion:
+    if not is_release_version(candidate) or not is_release_version(installed):
         return False
+    return Version(candidate) > Version(installed)

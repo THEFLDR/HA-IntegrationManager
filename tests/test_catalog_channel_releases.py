@@ -97,15 +97,15 @@ def test_invalid_channel():
 
 def test_release_filtering(release_payload):
     items = [
-        release_payload("v0.1.0"),
-        release_payload("v0.2.0", True),
-        release_payload("v0.3.0-rc.1", True),
-        release_payload("v9.0.0-beta.1", True),
-        release_payload("v9.0.0-alpha.1", True),
-        release_payload("v8.0.0", draft=True),
+        release_payload("0.1.0"),
+        release_payload("0.2.0", True),
+        release_payload("0.3.0", True),
+        release_payload("9.0.0-beta.1", True),
+        release_payload("9.0.0-alpha.1", True),
+        release_payload("8.0.0", draft=True),
     ]
     assert select_release(items, "sample", STABLE).version == "0.1.0"
-    assert select_release(items, "sample", RC).version == "0.3.0rc1"
+    assert select_release(items, "sample", RC).version == "0.3.0"
     assert select_release(items[:2], "sample", RC).version == "0.2.0"
     assert select_release([], "sample", STABLE) is None
 
@@ -115,7 +115,7 @@ def test_release_filtering(release_payload):
     [
         {"immutable": False},
         {"tag_name": "main"},
-        {"tag_name": "v1.0.0-dev1"},
+        {"tag_name": "1.0.0-dev1"},
         {"assets": []},
         {"assets": [{"name": "other.zip"}]},
         {"assets": [{"name": "sample.zip", "digest": "bad", "size": 1, "id": 1}]},
@@ -141,7 +141,10 @@ def test_asset_validation(release_payload):
         ("0.2.0", "0.1.0", True),
         ("0.1.0", "0.1.0", False),
         ("0.1.0", "0.2.0", False),
-        ("0.2.0rc1", "0.1.0", True),
+        ("0.2.0rc1", "0.1.0", False),
+        ("0.1.1", "0.1.0", True),
+        ("0.10.0", "0.9.9", True),
+        ("0.1.10", "0.1.9", True),
         ("bad", "0.1.0", False),
     ],
 )

@@ -31,7 +31,7 @@ async def test_actual_home_assistant_startup(tmp_path, monkeypatch, offline):
     )
     instance = HomeAssistant(str(tmp_path))
     package = build(tmp_path / "package").read_bytes()
-    FileStore(str(tmp_path)).install(DOMAIN, validate_archive(package, DOMAIN, "0.1.0", HA_VERSION))
+    FileStore(str(tmp_path)).install(DOMAIN, validate_archive(package, DOMAIN, "0.1.1", HA_VERSION))
     instance.config.skip_pip = True
     loader.async_setup(instance)
     with socket.socket() as reservation:

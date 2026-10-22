@@ -34,7 +34,7 @@ test("friendly names, safe text and native entity controls", () => {
 });
 
 test("manager cannot uninstall itself; catalog uses integration name", () => {
-  panel.items = [{ name: "Integration Manager", domain: "integrationmanager", version: "0.1.0", files_present: true, entities: [] }];
+  panel.items = [{ name: "Integration Manager", domain: "integrationmanager", version: "0.1.1", files_present: true, entities: [] }];
   panel.catalog = [{ name: "Friendly Integration", repository: "THEFLDR/HA-Slug", domain: "sample", installed: false }];
   panel.render();
   const text = [...panel.shadowRoot.childNodes].map((node) => node.textContent).join("");

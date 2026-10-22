@@ -44,7 +44,7 @@ def archive():
 
 @pytest.fixture
 def release_payload():
-    def make(tag="v0.2.0", prerelease=False, **changes):
+    def make(tag="0.2.0", prerelease=False, **changes):
         return {
             "tag_name": tag,
             "prerelease": prerelease,

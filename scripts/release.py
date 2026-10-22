@@ -9,6 +9,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from custom_components.integrationmanager.version import is_release_version
+
 
 def gh(*arguments):
     executable = shutil.which("gh")
@@ -54,8 +56,8 @@ def tag_target(repo, tag, missing_ok=False):
 
 
 def main(action, tag, sha):
-    if not re.fullmatch(r"v\d+\.\d+\.\d+", tag) or not re.fullmatch(r"[0-9a-f]{40}", sha):
-        raise ValueError("An exact vX.Y.Z tag and full merged SHA are required")
+    if not is_release_version(tag) or not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise ValueError("An exact X.Y.Z tag and full merged SHA are required")
     repo = os.environ["GITHUB_REPOSITORY"]
     if repo != "THEFLDR/HA-IntegrationManager":
         raise ValueError("Only the owner repository can publish")
@@ -94,14 +96,18 @@ def main(action, tag, sha):
         )
         gh("release", "edit", tag, "--repo", repo, "--draft=false", "--prerelease")
         release = api(f"repos/{repo}/releases/tags/{tag}")
-        if not release.get("immutable") or not release["prerelease"]:
+        if (
+            release.get("tag_name") != tag
+            or not release.get("immutable")
+            or not release["prerelease"]
+        ):
             raise ValueError(
                 "GitHub did not confirm immutable prerelease publication; owner action required"
             )
         verify_asset(release, Path("dist/integrationmanager.zip").read_bytes())
     elif action == "promote":
         before = api(f"repos/{repo}/releases/tags/{tag}")
-        if not before.get("immutable") or not before["prerelease"]:
+        if before.get("tag_name") != tag or not before.get("immutable") or not before["prerelease"]:
             raise ValueError("Promotion requires an existing immutable prerelease")
         if tag_target(repo, tag) != sha:
             raise ValueError("Release tag does not point to the validated merged SHA")

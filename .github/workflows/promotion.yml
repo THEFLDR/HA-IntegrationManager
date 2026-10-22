@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Immutable prerelease tag tested in Sandbox
+        description: Immutable prerelease tag in X.Y.Z format (0.1.1), tested in Sandbox
         type: string
         required: true
       sha:
@@ -54,4 +54,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
           SHA: ${{ inputs.sha }}
-        run: python scripts/release.py promote "$TAG" "$SHA"
+        run: python -m scripts.release promote "$TAG" "$SHA"

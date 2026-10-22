@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag (v0.1.0)
+        description: Release tag in X.Y.Z format (0.1.1), published as a Release Candidate
         required: true
         type: string
       sha:
@@ -53,4 +53,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
           SHA: ${{ inputs.sha }}
-        run: python scripts/release.py publish "$TAG" "$SHA"
+        run: python -m scripts.release publish "$TAG" "$SHA"

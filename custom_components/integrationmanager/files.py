@@ -13,6 +13,7 @@ from packaging.version import Version
 
 from .catalog import DOMAIN_PATTERN
 from .const import MAX_ARCHIVE, MAX_FILES, MAX_UNPACKED
+from .version import is_release_version
 
 
 class InstallError(Exception):
@@ -69,9 +70,12 @@ def validate_archive(data: bytes, domain: str, version: str, ha_version: str) ->
             metadata = json.loads(files["release.json"])
             if (
                 manifest.get("domain") != domain
-                or Version(manifest["version"]) != Version(version)
+                or not is_release_version(version)
+                or not is_release_version(manifest["version"])
+                or manifest["version"] != version
                 or metadata["domain"] != domain
-                or Version(metadata["version"]) != Version(version)
+                or not is_release_version(metadata["version"])
+                or metadata["version"] != version
                 or Version(ha_version) < Version(metadata["minimum_home_assistant_version"])
                 or f"{prefix}__init__.py" not in files
             ):
