@@ -4,7 +4,8 @@ from homeassistant.components.sensor import SensorEntity
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import EntityCategory
 
-from .const import CHANNEL_MODES, CHANNELS, DOMAIN, NAME
+from .const import CHANNEL_MODES, CHANNELS, DOMAIN
+from .service import service_info
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -14,7 +15,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
 class ChannelSensor(SensorEntity):
     _attr_has_entity_name = True
-    _attr_name = f"{NAME} Release Channel"
+    _attr_name = "Release Channel"
     _attr_translation_key = "release_channel"
     _attr_should_poll = False
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -24,10 +25,11 @@ class ChannelSensor(SensorEntity):
     def __init__(self, runtime):
         self.runtime = runtime
         self._attr_unique_id = f"{runtime.entry.entry_id}_release_channel"
+        self._attr_device_info = service_info(runtime.entry)
 
     @property
     def suggested_object_id(self):
-        return f"{DOMAIN}_release_channel"
+        return "release_channel"
 
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
@@ -47,7 +49,7 @@ class ChannelSensor(SensorEntity):
 
 
 class ChannelModeSensor(ChannelSensor):
-    _attr_name = f"{NAME} Release Channel Mode"
+    _attr_name = "Release Channel Mode"
     _attr_translation_key = "release_channel_mode"
 
     def __init__(self, runtime):
@@ -56,7 +58,7 @@ class ChannelModeSensor(ChannelSensor):
 
     @property
     def suggested_object_id(self):
-        return f"{DOMAIN}_release_channel_mode"
+        return "release_channel_mode"
 
     @property
     def native_value(self):

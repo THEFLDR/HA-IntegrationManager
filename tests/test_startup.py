@@ -17,7 +17,10 @@ from custom_components import integrationmanager as integration
 from custom_components.integrationmanager.const import DOMAIN, NAME, RC, STABLE
 
 
-@pytest.mark.parametrize("offline,legacy", [(False, False), (True, False), (False, True)])
+@pytest.mark.parametrize(
+    "offline,legacy",
+    [(False, None), (True, None), (False, "0.1.1"), (False, "0.1.2"), (False, "0.1.2-disabled")],
+)
 async def test_actual_home_assistant_startup(tmp_path, monkeypatch, offline, legacy):
     from custom_components.integrationmanager.files import FileStore, validate_archive
     from custom_components.integrationmanager.github import GitHubClient, GitHubError
@@ -27,28 +30,36 @@ async def test_actual_home_assistant_startup(tmp_path, monkeypatch, offline, leg
     old_setup = integration.async_setup_entry
 
     async def upgrading_setup(hass, config_entry):
-        if legacy:
-            hass.config_entries.async_update_entry(config_entry, options={"channel": RC})
-            device = dr.async_get(hass).async_get_or_create(
-                config_entry_id=config_entry.entry_id,
-                identifiers={(DOMAIN, config_entry.entry_id)},
-                name=NAME,
-                manufacturer="THEFLDR",
-                sw_version="0.1.1",
-            )
+        if legacy and not legacy_entities:
+            options = {"channel": RC}
+            if legacy.startswith("0.1.2"):
+                options.update(global_channel=STABLE, channel_mode="override")
+            hass.config_entries.async_update_entry(config_entry, options=options)
+            device = None
+            if legacy == "0.1.1":
+                device = dr.async_get(hass).async_get_or_create(
+                    config_entry_id=config_entry.entry_id,
+                    identifiers={(DOMAIN, config_entry.entry_id)},
+                    name=NAME,
+                    manufacturer="THEFLDR",
+                    sw_version="0.1.1",
+                )
             for platform, suffix in [
                 ("binary_sensor", "health"),
                 ("sensor", "release_channel"),
                 ("update", "update"),
-            ]:
+            ] + ([("sensor", "release_channel_mode")] if legacy.startswith("0.1.2") else []):
                 registered = er.async_get(hass).async_get_or_create(
                     platform,
                     DOMAIN,
                     f"{config_entry.entry_id}_{suffix}",
                     config_entry=config_entry,
-                    device_id=device.id,
+                    device_id=device.id if device else None,
                     suggested_object_id=f"owner_existing_{suffix}",
                     entity_category=EntityCategory.DIAGNOSTIC if suffix != "update" else None,
+                    disabled_by=er.RegistryEntryDisabler.USER
+                    if legacy == "0.1.2-disabled" and suffix == "release_channel_mode"
+                    else None,
                 )
                 er.async_get(hass).async_update_entity(registered.entity_id, name=f"Owner {suffix}")
                 legacy_entities[suffix] = registered.entity_id
@@ -68,7 +79,7 @@ async def test_actual_home_assistant_startup(tmp_path, monkeypatch, offline, leg
     )
     instance = HomeAssistant(str(tmp_path))
     package = build(tmp_path / "package").read_bytes()
-    FileStore(str(tmp_path)).install(DOMAIN, validate_archive(package, DOMAIN, "0.1.2", HA_VERSION))
+    FileStore(str(tmp_path)).install(DOMAIN, validate_archive(package, DOMAIN, "0.1.3", HA_VERSION))
     instance.config.skip_pip = True
     loader.async_setup(instance)
     with socket.socket() as reservation:
@@ -118,13 +129,18 @@ async def test_actual_home_assistant_startup(tmp_path, monkeypatch, offline, leg
         assert channel[0].attributes["effective_channel"] == expected_channel
         assert "source" not in channel[0].attributes and "mode" not in channel[0].attributes
         config_entry = created["result"]
-        assert (
-            dr.async_entries_for_config_entry(dr.async_get(instance), config_entry.entry_id) == []
-        )
+        services = dr.async_entries_for_config_entry(dr.async_get(instance), config_entry.entry_id)
+        assert len(services) == 1
+        service = services[0]
+        assert service.entry_type == dr.DeviceEntryType.SERVICE
+        assert service.identifiers == {(DOMAIN, config_entry.entry_id)}
+        assert service.config_entry_id == config_entry.entry_id
+        assert service.name == NAME and service.manufacturer == "THEFLDR"
+        assert service.sw_version == "0.1.3"
         registry = er.async_get(instance)
         registered = er.async_entries_for_config_entry(registry, config_entry.entry_id)
         assert len(registered) == 4
-        assert all(item.device_id is None for item in registered)
+        assert all(item.device_id == service.id for item in registered)
         for item in registered:
             suffix = item.unique_id.removeprefix(f"{config_entry.entry_id}_")
             assert item.entity_category == (
@@ -138,13 +154,38 @@ async def test_actual_home_assistant_startup(tmp_path, monkeypatch, offline, leg
                 assert item.entity_id == legacy_entities[suffix]
                 assert item.name == f"Owner {suffix}"
             else:
-                assert item.entity_id == f"{item.domain}.{DOMAIN}_{suffix}"
+                assert item.entity_id == f"{item.domain}.integration_manager_{suffix}"
         mode_entry = next(
             item for item in registered if item.translation_key == "release_channel_mode"
         )
-        assert instance.states.get(mode_entry.entity_id).state == (
-            "Override" if legacy else "Managed"
-        )
+        if legacy == "0.1.2-disabled":
+            assert mode_entry.disabled_by == er.RegistryEntryDisabler.USER
+            assert instance.states.get(mode_entry.entity_id) is None
+        else:
+            assert instance.states.get(mode_entry.entity_id).state == (
+                "Override" if legacy else "Managed"
+            )
+        if legacy and legacy.startswith("0.1.2"):
+            assert dict(config_entry.options) == {
+                "global_channel": STABLE,
+                "channel_mode": "override",
+                "channel": RC,
+            }
+        entity_ids = {item.entity_id for item in registered}
+        original_options = dict(config_entry.options)
+        assert await instance.config_entries.async_reload(config_entry.entry_id)
+        await instance.async_block_till_done()
+        assert config_entry.options == original_options
+        assert {
+            item.entity_id
+            for item in er.async_entries_for_config_entry(registry, config_entry.entry_id)
+        } == entity_ids
+        assert [
+            item.id
+            for item in dr.async_entries_for_config_entry(
+                dr.async_get(instance), config_entry.entry_id
+            )
+        ] == [service.id]
         await instance.async_start()
         async with aiohttp.ClientSession() as session:
             async with session.get(f"http://127.0.0.1:{port}/{DOMAIN}_static/panel.js") as response:
@@ -193,9 +234,37 @@ async def test_actual_home_assistant_startup(tmp_path, monkeypatch, offline, leg
                         assert "up to date" in checked["result"]["message"]
                     elif admin:
                         assert "offline" in checked["error"]["message"]
+                    if admin:
+                        # These are the native frontend's service-detail prerequisites.
+                        await ws.send_json({"id": 3, "type": "config/device_registry/list"})
+                        devices_response = await ws.receive_json()
+                        assert devices_response["success"]
+                        native_services = [
+                            item for item in devices_response["result"] if item["id"] == service.id
+                        ]
+                        assert (
+                            len(native_services) == 1
+                            and native_services[0]["entry_type"] == "service"
+                        )
+                        await ws.send_json({"id": 4, "type": "config/entity_registry/list"})
+                        entities_response = await ws.receive_json()
+                        assert entities_response["success"]
+                        native_entities = [
+                            item
+                            for item in entities_response["result"]
+                            if item["config_entry_id"] == config_entry.entry_id
+                        ]
+                        assert len(native_entities) == 4
+                        assert all(item["device_id"] == service.id for item in native_entities)
         await instance.async_block_till_done(wait_background_tasks=True)
         assert await instance.config_entries.async_unload(created["result"].entry_id)
         assert DOMAIN not in instance.data
+        await instance.config_entries.async_remove(config_entry.entry_id)
+        await instance.async_block_till_done()
+        assert (
+            dr.async_entries_for_config_entry(dr.async_get(instance), config_entry.entry_id) == []
+        )
+        assert er.async_entries_for_config_entry(registry, config_entry.entry_id) == []
     finally:
         await instance.async_stop(force=True)
         await resolver.close()

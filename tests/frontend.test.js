@@ -34,7 +34,7 @@ test("friendly names, safe text and native entity controls", () => {
 });
 
 test("manager cannot uninstall itself; catalog uses integration name", () => {
-  panel.items = [{ name: "Integration Manager", domain: "integrationmanager", version: "0.1.2", files_present: true, entities: [] }];
+  panel.items = [{ name: "Integration Manager", domain: "integrationmanager", version: "0.1.3", files_present: true, entities: [] }];
   panel.catalog = [{ name: "Friendly Integration", repository: "THEFLDR/HA-Slug", domain: "sample", installed: false }];
   panel.render();
   const text = [...panel.shadowRoot.childNodes].map((node) => node.textContent).join("");
@@ -108,7 +108,7 @@ test("health, update, channel and mode display live human-readable states", () =
     "sensor.owner_mode": { state: "Managed" },
   };
   panel.render();
-  const states = () => [...panel.shadowRoot.querySelectorAll("[data-entity]")].map((element) => element.textContent);
+  const states = () => [...panel.shadowRoot.querySelectorAll("[data-settings=manager] [data-entity]")].map((element) => element.textContent);
   assert.deepEqual(states(), ["OK", "Up-to-date", "Release Candidate", "Managed"]);
   panel.hass = { ...panel._hass, states: {
     "binary_sensor.owner_health": { state: "on" },
@@ -171,4 +171,85 @@ test("global and manager channels use separate controls and commands", async () 
     { action: "manager_channel", mode: "default" },
     { action: "manager_channel", mode: "override", channel: "release_candidate" },
   ]);
+});
+
+test("compact list scales with closed accessible details and no invented statuses", () => {
+  panel.items = Array.from({ length: 80 }, (_, index) => ({
+    domain: `sample_${index}`, name: `Sample ${index}`, version: "1.2.3", files_present: true, entities: [],
+  }));
+  panel.render();
+  const table = panel.shadowRoot.querySelector("table");
+  assert.deepEqual([...table.querySelectorAll("th")].map((cell) => cell.textContent),
+    ["Integration", "Installed version", "Effective channel", "Health", "Update", "Details / actions"]);
+  assert.equal(table.querySelectorAll("tbody tr").length, 80);
+  assert.equal(table.querySelectorAll("details[open]").length, 0);
+  assert(table.querySelector("summary").getAttribute("aria-label").includes("Sample 0"));
+  assert.equal(table.querySelectorAll("td")[2].textContent, "Not provided");
+  assert.equal(table.querySelectorAll("td")[3].textContent, "Not provided");
+  assert.equal(table.querySelectorAll("td")[4].textContent, "Not provided");
+  assert.equal(panel.shadowRoot.querySelector(".table-scroll").getAttribute("tabindex"), "0");
+  assert.equal(panel.shadowRoot.querySelector(".table-scroll").getAttribute("role"), "region");
+});
+
+test("expanded details survive refresh and keep native entity and removal actions", async () => {
+  panel.items = [{ domain: "sample", name: "Sample", version: "1.2.3", files_present: true,
+    entities: [{ entity_id: "update.native", name: "Native update", kind: "update" }] }];
+  panel.render();
+  panel.shadowRoot.querySelector("details").setAttribute("open", "");
+  await panel.refresh();
+  const details = panel.shadowRoot.querySelector("details");
+  assert(details.hasAttribute("open"));
+  assert.deepEqual([...details.querySelectorAll("button")].map((button) => button.textContent),
+    ["Native update", "Remove files", "Clean up HA configuration…"]);
+  let entityId;
+  panel.addEventListener("hass-more-info", (event) => { entityId = event.detail.entityId; });
+  details.querySelector("button").click();
+  assert.equal(entityId, "update.native");
+  details.removeAttribute("open");
+  panel.render();
+  assert(!panel.shadowRoot.querySelector("details").hasAttribute("open"));
+});
+
+test("manager settings own its controls while list retains a compact summary", async () => {
+  const entity = { entity_id: "update.native", name: "Manager update", kind: "update" };
+  panel.items = [{ domain: "integrationmanager", name: "Integration Manager", version: "0.1.3", files_present: true, entities: [entity] }];
+  panel.managerMode = "managed";
+  panel.render();
+  const manager = panel.shadowRoot.querySelector("[data-settings=manager]");
+  const global = panel.shadowRoot.querySelector("[data-settings=global]");
+  assert.equal(global.querySelector("h2").textContent, "Global Settings");
+  assert.equal(manager.querySelector("h2").textContent, "Integration Manager");
+  assert.equal(global.querySelectorAll("select").length, 1);
+  assert.equal(manager.querySelectorAll("select").length, 1);
+  assert.equal(panel.shadowRoot.querySelector("tbody").querySelectorAll("button").length, 0);
+  assert(manager.querySelector("button").textContent === entity.name);
+  panel.managerMode = "override";
+  panel.managerOverride = "release_candidate";
+  panel.render();
+  assert.equal(panel.shadowRoot.querySelectorAll("[data-settings=manager] select").length, 2);
+  panel.restart = true;
+  panel.render();
+  assert([...panel.shadowRoot.querySelectorAll("select")].every((select) => select.disabled));
+});
+
+test("list summaries reflect live unknown, unavailable, channel and mode states", () => {
+  panel.items = [{ domain: "sample", name: "Sample", files_present: true, entities: [
+    { entity_id: "binary_sensor.health", name: "Health", kind: "health" },
+    { entity_id: "update.native", name: "Update", kind: "update" },
+    { entity_id: "sensor.channel", name: "Channel", kind: "release_channel" },
+    { entity_id: "sensor.mode", name: "Mode", kind: "release_channel_mode" },
+  ] }];
+  panel.render();
+  const values = () => [...panel.shadowRoot.querySelectorAll("tbody [data-entity]")].slice(0, 4).map((node) => node.textContent);
+  panel.hass = { ...panel._hass, states: {
+    "binary_sensor.health": { state: "unknown" }, "update.native": { state: "unavailable" },
+    "sensor.channel": { state: "Release Candidate" }, "sensor.mode": { state: "Default" },
+  } };
+  assert.deepEqual(values(), ["Release Candidate", "Default", "Unknown", "Unavailable"]);
+  panel.hass = { ...panel._hass, states: {
+    "binary_sensor.health": { state: "off" }, "update.native": { state: "on" },
+    "sensor.channel": { state: "Stable" }, "sensor.mode": { state: "Managed" },
+  } };
+  assert.deepEqual(values(), ["Stable", "Managed", "OK", "Update available"]);
+  assert.equal(calls.length, 0);
 });

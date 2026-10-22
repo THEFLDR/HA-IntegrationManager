@@ -3,8 +3,9 @@
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, NAME
+from .const import DOMAIN
 from .coordinator import async_get_coordinator
+from .service import service_info
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -15,7 +16,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
 class ManagerHealth(CoordinatorEntity, BinarySensorEntity):
     _attr_has_entity_name = True
-    _attr_name = f"{NAME} Health"
+    _attr_name = "Health"
     _attr_translation_key = "health"
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
     _attr_entity_registry_enabled_default = True
@@ -25,10 +26,11 @@ class ManagerHealth(CoordinatorEntity, BinarySensorEntity):
     def __init__(self, coordinator, runtime):
         super().__init__(coordinator)
         self._attr_unique_id = f"{runtime.entry.entry_id}_health"
+        self._attr_device_info = service_info(runtime.entry)
 
     @property
     def suggested_object_id(self):
-        return f"{DOMAIN}_health"
+        return "health"
 
     @property
     def available(self):
