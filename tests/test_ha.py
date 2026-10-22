@@ -37,6 +37,12 @@ def entry(domain=DOMAIN):
     )
 
 
+async def add_entry(hass, current, monkeypatch):
+    with monkeypatch.context() as context:
+        context.setattr(hass.config_entries, "async_setup", AsyncMock(return_value=True))
+        await hass.config_entries.async_add(current)
+
+
 def write_integration(root, domain, name="Friendly Native", version="0.1.0"):
     target = root / domain
     target.mkdir(parents=True)
@@ -108,6 +114,7 @@ def test_inventory_ignores_unsafe_and_bad_files(tmp_path):
 async def test_lifecycle(hass, monkeypatch):
     monkeypatch.setattr("homeassistant.helpers.aiohttp_client.async_get_clientsession", Mock())
     current = entry()
+    await add_entry(hass, current, monkeypatch)
     panel = AsyncMock()
     monkeypatch.setattr("homeassistant.components.panel_custom.async_register_panel", panel)
     remove = Mock()
@@ -125,6 +132,8 @@ async def test_lifecycle(hass, monkeypatch):
 
 
 async def test_setup_failure_cleans_panel_and_runtime(hass, monkeypatch):
+    current = entry()
+    await add_entry(hass, current, monkeypatch)
     monkeypatch.setattr("homeassistant.helpers.aiohttp_client.async_get_clientsession", Mock())
     monkeypatch.setattr(
         "homeassistant.components.panel_custom.async_register_panel",
@@ -132,7 +141,7 @@ async def test_setup_failure_cleans_panel_and_runtime(hass, monkeypatch):
     )
     monkeypatch.setattr("homeassistant.components.frontend.async_remove_panel", Mock())
     with pytest.raises(ValueError):
-        await integration.async_setup_entry(hass, entry())
+        await integration.async_setup_entry(hass, current)
     assert DOMAIN not in hass.data
 
 
@@ -155,12 +164,12 @@ async def test_native_entities_and_update_errors(hass, runtime):
     sensor = add.call_args.args[0][0]
     assert isinstance(sensor, ChannelSensor)
     assert sensor.native_value == "Stable"
-    assert sensor.extra_state_attributes == {"source": "default", "effective_channel": STABLE}
+    assert sensor.extra_state_attributes == {"effective_channel": STABLE}
     runtime.entry.options["channel"] = RC
     assert sensor.native_value == "Release Candidate"
-    assert sensor.extra_state_attributes == {"source": "override", "effective_channel": RC}
+    assert sensor.extra_state_attributes == {"effective_channel": RC}
     runtime.entry.options["channel"] = STABLE
-    assert sensor.extra_state_attributes == {"source": "override", "effective_channel": STABLE}
+    assert sensor.extra_state_attributes == {"effective_channel": STABLE}
     runtime.entry.options["channel"] = RC
     await setup_update(hass, runtime.entry, add)
     entity = add.call_args.args[0][0]
@@ -219,9 +228,10 @@ async def test_options(hass, monkeypatch):
     monkeypatch.setattr(hass.config_entries, "async_get_known_entry", Mock(return_value=current))
     form = await options.async_step_init()
     assert form["type"] == "form"
-    assert form["data_schema"]({"channel": RC}) == {"channel": RC}
-    result = await options.async_step_init({"channel": RC})
-    assert result["data"] == {"channel": RC}
+    values = {"global_channel": STABLE, "channel_mode": "override", "channel": RC}
+    assert form["data_schema"](values) == values
+    result = await options.async_step_init(values)
+    assert result["data"] == values
 
 
 async def test_websocket_admin_and_errors(hass, runtime):
@@ -266,7 +276,7 @@ async def test_websocket_commands(hass, runtime, monkeypatch):
     update = Mock()
     monkeypatch.setattr(hass.config_entries, "async_update_entry", update)
     await handle(hass, connection, {"id": 2, "action": "channel", "channel": RC})
-    assert update.call_args.kwargs["options"] == {"channel": RC}
+    assert update.call_args.kwargs["options"] == {"global_channel": RC}
     runtime.restart_required = True
     await handle(hass, connection, {"id": 3, "action": "channel", "channel": RC})
     assert connection.send_error.call_args.args[1] == "operation_failed"

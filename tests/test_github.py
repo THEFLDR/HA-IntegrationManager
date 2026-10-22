@@ -132,3 +132,19 @@ async def test_connection_failure():
     github.session.get.side_effect = aiohttp.ClientError("offline")
     with pytest.raises(GitHubError):
         await github.catalog()
+
+
+async def test_manual_check_invalidates_only_selected_repository_releases():
+    github = client(Response(), Response())
+    assert await github.releases("THEFLDR/HA-IntegrationManager") == []
+    assert await github.releases("THEFLDR/HA-IntegrationManager") == []
+    assert github.session.get.call_count == 1
+    github.cache["catalog"] = (0, [])
+    github.cache["https://api.github.com/repos/THEFLDR/Other/releases?page=1"] = (0, [])
+    github.invalidate_releases("THEFLDR/HA-IntegrationManager")
+    assert set(github.cache) == {
+        "catalog",
+        "https://api.github.com/repos/THEFLDR/Other/releases?page=1",
+    }
+    assert await github.releases("THEFLDR/HA-IntegrationManager") == []
+    assert github.session.get.call_count == 2

@@ -8,7 +8,6 @@ from .const import DOMAIN, NAME, REPOSITORY, VERSION
 from .coordinator import async_get_coordinator
 from .files import InstallError
 from .github import GitHubError
-from .sensor import device_info
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -19,7 +18,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
 class ManagerUpdate(CoordinatorEntity, UpdateEntity):
     _attr_has_entity_name = True
-    _attr_name = "Update"
+    _attr_name = f"{NAME} Update"
     _attr_installed_version = VERSION
     _attr_title = NAME
     _attr_supported_features = UpdateEntityFeature.INSTALL | UpdateEntityFeature.RELEASE_NOTES
@@ -30,7 +29,10 @@ class ManagerUpdate(CoordinatorEntity, UpdateEntity):
         super().__init__(coordinator)
         self.runtime = runtime
         self._attr_unique_id = f"{runtime.entry.entry_id}_update"
-        self._attr_device_info = device_info(runtime.entry)
+
+    @property
+    def suggested_object_id(self):
+        return f"{DOMAIN}_update"
 
     @property
     def entity_picture(self):

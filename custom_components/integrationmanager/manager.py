@@ -6,7 +6,9 @@ from dataclasses import asdict
 from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.exceptions import HomeAssistantError
 
-from .const import DOMAIN, REPOSITORY, STABLE, VERSION
+from .channel import resolve_channel
+from .const import DOMAIN, MANAGED, REPOSITORY, STABLE, VERSION
+from .coordinator import async_get_coordinator
 from .files import InstallError, validate_archive
 from .inventory import overview
 from .releases import is_newer, select_release
@@ -23,7 +25,17 @@ class Manager:
 
     @property
     def channel(self):
-        return self.entry.options.get("channel", STABLE)
+        return resolve_channel(self.hass, self.entry.options.get("channel"), self.channel_mode)[
+            "effective_channel"
+        ]
+
+    @property
+    def global_channel(self):
+        return self.entry.options.get("global_channel", self.entry.options.get("channel", STABLE))
+
+    @property
+    def channel_mode(self):
+        return self.entry.options.get("channel_mode", MANAGED)
 
     async def catalog(self):
         self._catalog = await self.client.catalog()
@@ -46,7 +58,20 @@ class Manager:
         ]
 
     async def release(self, repository, domain):
-        return select_release(await self.client.releases(repository), domain, self.channel)
+        channel = self.channel if domain == DOMAIN else self.global_channel
+        return select_release(await self.client.releases(repository), domain, channel)
+
+    async def check_for_updates(self):
+        """Refresh the existing native-entity coordinator on dashboard demand."""
+        async with self.lock:
+            coordinator = await async_get_coordinator(self.hass, self.entry, self)
+            self.client.invalidate_releases(REPOSITORY)
+            await coordinator.async_refresh()
+            if not coordinator.last_update_success:
+                raise InstallError(f"Update check failed: {coordinator.last_exception}")
+            if coordinator.data and is_newer(coordinator.data.version, VERSION):
+                return f"Update available: {coordinator.data.version}."
+            return "Update check complete. Integration Manager is up to date."
 
     async def install(self, domain: str):
         if domain == DOMAIN:
