@@ -48,6 +48,7 @@ async def command(hass, connection, msg):
         if action == "overview":
             result.update(
                 integrations=await runtime.installed(),
+                update_status=runtime.self_update_status,
                 channel=runtime.global_channel,
                 manager_channel=runtime.channel,
                 manager_channel_mode=runtime.channel_mode,

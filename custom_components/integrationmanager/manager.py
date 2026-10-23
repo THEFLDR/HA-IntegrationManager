@@ -21,6 +21,14 @@ from .inventory import overview
 from .releases import is_newer, select_release
 from .repairs import async_restart_issue
 
+UPDATE_STEPS = (
+    "checking_release",
+    "downloading",
+    "validating_archive",
+    "backing_up",
+    "installing_files",
+)
+
 
 class Manager:
     def __init__(self, hass, entry, client, store):
@@ -38,6 +46,10 @@ class Manager:
         self.update_in_progress = False
         self.update_phase = None
         self.update_error = None
+        self.update_target_version = None
+        self.update_backup_requested = False
+        self.update_files_installed = False
+        self.update_step = None
         self.health = Health(self)
         self.health_task = None
         self.health_dirty = False
@@ -59,7 +71,20 @@ class Manager:
                     self.health.errors[check] = str(
                         result.get("error") or "Previous operation failed"
                     )
+        status = saved.get("update_status", {})
+        self.update_phase = status.get("phase")
+        self.update_error = status.get("error")
+        self.update_target_version = status.get("target_version")
+        self.update_backup_requested = bool(status.get("backup_requested"))
+        self.update_files_installed = bool(status.get("files_installed"))
+        self.update_step = status.get("step")
         self.pending_manager_version = saved.get("pending_manager_version")
+        # Upgrade old Store data without inventing a completed installation.
+        if not status and self.pending_manager_version:
+            self.update_target_version = self.pending_manager_version
+            self.update_files_installed = self.health.checks["installation"] == "ok"
+            self.update_phase = "restart_required" if self.update_files_installed else "failed"
+            self.update_error = self.health.errors.get("installation")
         if saved.get("boot_id") == self.boot_id:
             self.pending_domains = set(saved.get("pending_domains", []))
             self.restart_required = bool(self.pending_domains) or bool(
@@ -70,6 +95,31 @@ class Manager:
             self.restart_required = True
         else:
             self.pending_manager_version = None
+        if saved.get("boot_id") != self.boot_id and self.update_target_version:
+            if DOMAIN in self.pending_domains:
+                self.update_phase = "restart_mismatch"
+                self.update_error = (
+                    f"Restart did not activate {self.update_target_version}; running {VERSION}. "
+                    "Inspect installed files and Health before retrying."
+                    + (f" Previous error: {self.update_error}" if self.update_error else "")
+                )
+            elif (
+                self.update_files_installed
+                and VERSION == self.update_target_version
+                and self.update_phase
+                in {"installing_files", "restart_required", "restart_mismatch"}
+            ):
+                self.update_phase = "completed"
+                self.update_error = None
+            elif VERSION == self.update_target_version and self.update_phase == "restart_mismatch":
+                self.update_phase = "failed"
+                self.update_error = (
+                    f"Running {VERSION}, but the previous installation was incomplete. "
+                    f"Verify Health and files. Previous result: {self.update_error}"
+                )
+        if self.update_phase in UPDATE_STEPS:
+            self.update_phase = "interrupted"
+            self.update_error = "The previous update was interrupted. Check Health and installed files before retrying."
         async_restart_issue(self.hass, self.restart_required)
         await self.async_save()
 
@@ -84,6 +134,17 @@ class Manager:
                     "pending_domains": sorted(self.pending_domains),
                     "pending_manager_version": self.pending_manager_version,
                     "restart_required": self.restart_required,
+                    "update_status": {
+                        key: self.self_update_status[key]
+                        for key in (
+                            "phase",
+                            "step",
+                            "target_version",
+                            "backup_requested",
+                            "files_installed",
+                            "error",
+                        )
+                    },
                     "operation_results": {
                         check: {
                             "state": self.health.checks[check],
@@ -120,9 +181,26 @@ class Manager:
     def backup_available(self):
         return backup_manager(self.hass) is not None
 
-    def phase(self, phase):
+    @property
+    def self_update_status(self):
+        return {
+            "phase": self.update_phase,
+            "step": self.update_step,
+            "target_version": self.update_target_version,
+            "running_version": VERSION,
+            "backup_requested": self.update_backup_requested,
+            "files_installed": self.update_files_installed,
+            "error": self.update_error,
+            "in_progress": self.update_in_progress,
+            "restart_required": DOMAIN in self.pending_domains,
+        }
+
+    async def async_phase(self, phase):
         self.update_phase = phase
+        if phase in UPDATE_STEPS:
+            self.update_step = phase
         self.notify()
+        await self.async_save()
 
     @property
     def channel(self):
@@ -206,8 +284,12 @@ class Manager:
                 raise InstallError("Restart Home Assistant before changing this integration again")
             self.update_in_progress = True
             self.update_error = None
-            self.phase("checking_release")
+            self.update_target_version = None
+            self.update_files_installed = False
+            self.update_backup_requested = backup
+            self.update_step = None
             try:
+                await self.async_phase("checking_release")
                 release = await self.release(REPOSITORY, DOMAIN)
                 if release is None or not is_newer(release.version, VERSION):
                     raise InstallError("No newer compatible release is available")
@@ -215,33 +297,42 @@ class Manager:
                     raise InstallError(
                         "Requested version does not match the selected channel release"
                     )
+                self.update_target_version = release.version
                 await self._install(REPOSITORY, DOMAIN, release, True, backup=backup)
             except asyncio.CancelledError:
-                self.phase("restart_required" if DOMAIN in self.pending_domains else "cancelled")
+                self.update_error = (
+                    "The request was cancelled after files were installed; restart is still required."
+                    if self.update_files_installed
+                    else "Update cancelled. Check Health before retrying."
+                )
+                await self.async_phase(
+                    "restart_required" if self.update_files_installed else "cancelled"
+                )
                 raise
-            except (InstallError, GitHubError, OSError, ValueError) as err:
+            except Exception as err:
                 self.update_error = str(err)
-                self.phase("failed")
+                await self.async_phase("failed")
                 raise
             finally:
                 self.update_in_progress = False
                 self.notify()
                 self.schedule_health(filesystem=True)
+                await self.async_save()
 
     async def _install(self, repository, domain, release, replace, *, backup=False):
         if domain in self.pending_domains:
             raise InstallError("Restart Home Assistant before changing this integration again")
         try:
             if self.update_in_progress:
-                self.phase("downloading")
+                await self.async_phase("downloading")
             data = await self.client.download(repository, domain, release)
             if self.update_in_progress:
-                self.phase("validating_archive")
+                await self.async_phase("validating_archive")
             files = await self.hass.async_add_executor_job(
                 validate_archive, data, domain, release.version, HA_VERSION
             )
             if backup:
-                self.phase("backing_up")
+                await self.async_phase("backing_up")
                 try:
                     await async_backup(self.hass)
                 except asyncio.CancelledError:
@@ -255,11 +346,12 @@ class Manager:
                 else:
                     self.health.outcome("backup")
             if self.update_in_progress:
-                self.phase("installing_files")
+                await self.async_phase("installing_files")
             if domain == DOMAIN:
                 self.pending_manager_version = release.version
+                await self.async_save()
             await self._change_files(domain, self.store.install, domain, files, replace)
-        except (InstallError, GitHubError, OSError, ValueError) as err:
+        except Exception as err:
             self.health.outcome("installation", err)
             if domain == DOMAIN and domain not in self.pending_domains:
                 self.pending_manager_version = None
@@ -267,8 +359,10 @@ class Manager:
         else:
             self.health.outcome("installation")
             if self.update_in_progress:
-                self.phase("restart_required")
+                await self.async_phase("restart_required")
         finally:
+            if domain == DOMAIN and domain not in self.pending_domains:
+                self.pending_manager_version = None
             await self.async_save()
             self.schedule_health(filesystem=True)
 
@@ -293,6 +387,8 @@ class Manager:
                 self._restart_notice()
                 await self.async_save()
             raise
+        if domain == DOMAIN:
+            self.update_files_installed = True
         self.pending_domains.add(domain)
         self._restart_notice()
         self.health.outcome("installation")
@@ -310,8 +406,8 @@ class Manager:
                 "HA configuration entries were removed. Restart Home Assistant manually "
                 "to finish unloading the integration."
                 if configuration_removed
-                else "Integration files changed. Restart Home Assistant manually to apply them. "
-                "Configuration and data have been preserved."
+                else "Integration files changed. Restart Home Assistant to apply them, manually "
+                "or through Repairs (Fix issue, then confirm). Configuration and data have been preserved."
             ),
             "Integration Manager: restart required",
             f"{DOMAIN}_restart",

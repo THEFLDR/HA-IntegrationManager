@@ -34,7 +34,7 @@ test("friendly names, safe text and native entity controls", () => {
 });
 
 test("manager cannot uninstall itself; catalog uses integration name", () => {
-  panel.items = [{ name: "Integration Manager", domain: "integrationmanager", version: "0.1.5", files_present: true, entities: [] }];
+  panel.items = [{ name: "Integration Manager", domain: "integrationmanager", version: "0.1.6", files_present: true, entities: [] }];
   panel.catalog = [{ name: "Friendly Integration", repository: "THEFLDR/HA-Slug", domain: "sample", installed: false }];
   panel.render();
   const text = [...panel.shadowRoot.childNodes].map((node) => node.textContent).join("");
@@ -214,7 +214,7 @@ test("expanded details survive refresh and keep native entity and removal action
 
 test("manager settings own its controls while list retains a compact summary", async () => {
   const entity = { entity_id: "update.native", name: "Manager update", kind: "update" };
-  panel.items = [{ domain: "integrationmanager", name: "Integration Manager", version: "0.1.5", files_present: true, entities: [entity] }];
+  panel.items = [{ domain: "integrationmanager", name: "Integration Manager", version: "0.1.6", files_present: true, entities: [entity] }];
   panel.managerMode = "managed";
   panel.render();
   const manager = panel.shadowRoot.querySelector("[data-settings=manager]");
@@ -264,7 +264,7 @@ test("each table state opens its native entity dialog with an accessible live la
     { entity_id: "binary_sensor.health", name: "Health", kind: "health", disabled: true },
     { entity_id: "update.native", name: "Update", kind: "update", hidden: true },
   ];
-  panel.items = [{ domain: "integrationmanager", name: "Integration Manager", entities, device_id: "actual-service-id", version: "0.1.5", files_present: true }];
+  panel.items = [{ domain: "integrationmanager", name: "Integration Manager", entities, device_id: "actual-service-id", version: "0.1.6", files_present: true }];
   panel.render();
   const opened = [];
   panel.addEventListener("hass-more-info", (event) => {
@@ -316,4 +316,113 @@ test("dashboard uses the approved PNG through the existing static route", () => 
   const image = panel.shadowRoot.querySelector("header img");
   assert.equal(image.getAttribute("src"), "/integrationmanager_static/icon.png");
   assert.equal(panel.shadowRoot.querySelectorAll("header img").length, 1);
+});
+
+function updateStatus(phase, extra = {}) {
+  return { phase, step: phase, running_version: "0.1.6", target_version: "0.2.0", in_progress: false,
+    backup_requested: false, files_installed: false, restart_required: false, error: null, ...extra };
+}
+
+function nativeStatus(status, state = "on") {
+  panel.items = [{ domain: "integrationmanager", name: "Integration Manager", entities: [
+    { entity_id: "update.owner_custom_id", kind: "update", name: "Update" },
+  ] }];
+  panel.hass = { ...panel._hass, states: { "update.owner_custom_id": { state, attributes: { update_status: status } } } };
+}
+
+test("native update phases stream to the dashboard without a dashboard action or polling", () => {
+  nativeStatus(updateStatus(null));
+  panel.render();
+  const section = panel.shadowRoot.querySelector("[data-self-update]");
+  const button = section.querySelector("[data-open-update]");
+  for (const [phase, label] of [["checking_release", "Checking release"], ["downloading", "Downloading"], ["validating_archive", "Validating archive"], ["backing_up", "Backing up"], ["installing_files", "Installing files"]]) {
+    nativeStatus(updateStatus(phase, { in_progress: true, backup_requested: true }));
+    assert.equal(section.querySelector("strong").textContent, label);
+    const progress = section.querySelector("progress");
+    assert(progress && !progress.hasAttribute("value"));
+    assert.equal(progress.getAttribute("aria-label"), label);
+    assert.equal(section.querySelector("[aria-current=step]").textContent, label);
+    assert.equal(section.querySelector("[data-open-update]"), button);
+    assert(panel.shadowRoot.querySelector("[data-settings=manager] select").disabled);
+  }
+  let opened;
+  panel.addEventListener("hass-more-info", (event) => { opened = event.detail.entityId; assert(event.bubbles); });
+  button.click();
+  assert.equal(opened, "update.owner_custom_id");
+  assert.equal(calls.length, 0);
+});
+
+test("restart-required outcome survives inactive native progress, render and a stale overview", async () => {
+  const status = updateStatus("restart_required", { files_installed: true, restart_required: true });
+  nativeStatus(status);
+  panel.render();
+  const result = () => panel.shadowRoot.querySelector("[data-self-update]");
+  assert.equal(result().querySelector("strong").textContent, "Files installed — restart required");
+  assert(result().textContent.includes("Running 0.1.6 · Target 0.2.0"));
+  assert.equal(result().querySelector("progress"), null);
+  assert.equal(result().querySelector("[data-open-repairs]").getAttribute("href"), "/config/repairs");
+  assert(!result().querySelector("[data-open-repairs]").hidden);
+  panel._hass.callWS = async ({ action }) => action === "catalog" ? { integrations: [] } : {
+    integrations: panel.items, channel: "stable", restart_required: false, update_status: updateStatus("checking_release", { in_progress: true }),
+  };
+  await panel.refresh();
+  assert.equal(result().querySelector("strong").textContent, "Files installed — restart required");
+  assert.equal(result().querySelector("progress"), null);
+  assert(!result().querySelector("ol").textContent.includes("Backing up"));
+  assert(result().querySelector("[data-update-copy]").getAttribute("aria-live") === "polite");
+});
+
+test("completed restart outcome distinguishes the running version from a staged update", () => {
+  nativeStatus(updateStatus("completed", { files_installed: true, running_version: "0.2.0" }));
+  panel.render();
+  const section = panel.shadowRoot.querySelector("[data-self-update]");
+  assert.equal(section.querySelector("strong").textContent, "Update completed — running 0.2.0");
+  assert.equal(section.dataset.outcome, "success");
+  assert(section.querySelector("[data-open-repairs]").hidden);
+  assert([...section.querySelectorAll("li")].every((li) => li.dataset.state === "done"));
+});
+
+test("failed, cancelled, interrupted, partial and mismatched updates remain visible and safe", () => {
+  panel.render();
+  for (const phase of ["failed", "cancelled", "interrupted", "restart_mismatch"]) {
+    nativeStatus(updateStatus(phase, { step: "installing_files", restart_required: true, error: "Real failure <script>unsafe</script>" }), "unavailable");
+    const section = panel.shadowRoot.querySelector("[data-self-update]");
+    assert(section.textContent.includes("Real failure <script>unsafe</script>"));
+    assert(!section.textContent.includes("Files installed"));
+    assert(section.textContent.includes("Files may have changed — restart required"));
+    assert(section.textContent.includes("Native Update is unavailable"));
+    assert.equal(section.querySelector("script"), null);
+    assert.equal(section.querySelector("progress"), null);
+    assert(!section.querySelector("[data-open-repairs]").hidden);
+  }
+  assert.equal(calls.length, 0);
+});
+
+test("fresh and unavailable entity cases use runtime status without inventing an entity", () => {
+  panel.items = [];
+  panel.updateStatusData = updateStatus(null, { target_version: null });
+  panel.render();
+  const section = panel.shadowRoot.querySelector("[data-self-update]");
+  assert.equal(section.querySelector("strong").textContent, "No self-update started");
+  assert(section.textContent.includes("Running 0.1.6"));
+  assert(section.querySelector("[data-open-update]").hidden);
+  assert(section.querySelector("[data-open-repairs]").hidden);
+  assert.equal(section.querySelector("ol"), null);
+  panel.updateStatusData = updateStatus("failed", { error: "Native entity disabled; inspect Health" });
+  panel.render();
+  assert(panel.shadowRoot.querySelector("[data-self-update]").textContent.includes("inspect Health"));
+});
+
+
+test("restart completion clears stale overview locks using the live global restart attribute", () => {
+  nativeStatus(updateStatus("restart_required", { files_installed: true, restart_required: true }));
+  panel._hass.states["update.owner_custom_id"].attributes.restart_required = true;
+  panel.render();
+  assert(panel.shadowRoot.querySelector("[data-settings=manager] select").disabled);
+  assert(!panel.shadowRoot.querySelector("[data-restart-notice]").hidden);
+  const completed = updateStatus("completed", { files_installed: true, running_version: "0.2.0" });
+  panel.hass = { ...panel._hass, states: { "update.owner_custom_id": { state: "off", attributes: { restart_required: false, update_status: completed } } } };
+  assert(!panel.shadowRoot.querySelector("[data-settings=manager] select").disabled);
+  assert(panel.shadowRoot.querySelector("[data-restart-notice]").hidden);
+  assert.equal(panel.shadowRoot.querySelector("[data-self-update] strong").textContent, "Update completed — running 0.2.0");
 });

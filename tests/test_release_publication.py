@@ -12,7 +12,7 @@ from scripts import release
 REPO = release.REPOSITORY
 SHA = "a" * 40
 OLD = "b" * 40
-TAG = "0.1.5"
+TAG = "0.1.6"
 WORKFLOW = {"id": 5, "name": "Validation", "path": ".github/workflows/ci.yml"}
 
 
@@ -90,7 +90,7 @@ def test_auto_uses_verified_run_sha_and_derives_version(event_env, monkeypatch):
     "changes",
     [
         {"event": "pull_request"},
-        {"head_branch": "CODEX/0.1.5"},
+        {"head_branch": "CODEX/0.1.6"},
         {"conclusion": "failure"},
         {"conclusion": "cancelled"},
         {"status": "in_progress"},
@@ -168,7 +168,7 @@ def test_prepare_rejects_unexpected_context(event_env, monkeypatch, reason):
     [
         ("THEFLDR", "refs/heads/main", TAG, SHA),
         ("other", "refs/heads/main", TAG, SHA),
-        ("THEFLDR", "refs/heads/CODEX/0.1.5", TAG, SHA),
+        ("THEFLDR", "refs/heads/CODEX/0.1.6", TAG, SHA),
         ("THEFLDR", "refs/heads/main", "0.1.4", SHA),
         ("THEFLDR", "refs/heads/main", TAG, "main"),
     ],
