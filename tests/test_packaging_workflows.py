@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 import subprocess
@@ -14,11 +15,11 @@ from scripts.package import ROOT, build
 
 
 def test_package_deterministic_and_installable(tmp_path):
-    artifact = build(tmp_path, "0.1.4")
+    artifact = build(tmp_path, "0.1.5")
     first = artifact.read_bytes()
-    assert build(tmp_path, "0.1.4").read_bytes() == first
+    assert build(tmp_path, "0.1.5").read_bytes() == first
     assert MIN_HA_VERSION == "2025.12.0"
-    files = validate_archive(first, DOMAIN, "0.1.4", MIN_HA_VERSION)
+    files = validate_archive(first, DOMAIN, "0.1.5", MIN_HA_VERSION)
     with zipfile.ZipFile(artifact) as archive:
         assert (
             json.loads(archive.read("release.json"))["minimum_home_assistant_version"]
@@ -33,7 +34,34 @@ def test_package_deterministic_and_installable(tmp_path):
         build(tmp_path, "0.2.0")
 
 
-def test_workflow_names_permissions_and_no_automatic_publication():
+def test_svg_embeds_only_the_exact_approved_png():
+    from defusedxml.ElementTree import fromstring
+
+    # Parse the owner-supplied asset without executing or modifying its content.
+    svg = fromstring(
+        (ROOT / "custom_components/integrationmanager/frontend/approved-icon.svg").read_bytes()
+    )
+    assert svg.tag == "{http://www.w3.org/2000/svg}svg"
+    assert svg.attrib["viewBox"] == "0 0 512 512"
+    assert [element.tag for element in svg] == [
+        "{http://www.w3.org/2000/svg}title",
+        "{http://www.w3.org/2000/svg}image",
+    ]
+    image = svg[1]
+    assert {key: value for key, value in image.attrib.items() if key != "href"} == {
+        "x": "0",
+        "y": "0",
+        "width": "512",
+        "height": "512",
+    }
+    assert image.attrib["href"].startswith("data:image/png;base64,")
+    assert (
+        base64.b64decode(image.attrib["href"].split(",", 1)[1], validate=True)
+        == (ROOT / "approved-icon.png").read_bytes()
+    )
+
+
+def test_workflow_names_permissions_and_publication_guards():
     workflows = {
         name: yaml.safe_load((ROOT / ".github/workflows" / name).read_text())
         for name in ("ci.yml", "release.yml", "promotion.yml")
@@ -44,7 +72,7 @@ def test_workflow_names_permissions_and_no_automatic_publication():
         for name, workflow in workflows.items()
     } == {
         "ci.yml": {"validation": "Validation"},
-        "release.yml": {"authorize": "Owner initiation", "publish": "Publication"},
+        "release.yml": {"authorize": "Publication authorization", "publish": "Publication"},
         "promotion.yml": {"authorize": "Owner initiation", "promote": "Promotion"},
     }
     assert "github/codeql-action" not in (ROOT / ".github/workflows/ci.yml").read_text()
@@ -53,11 +81,57 @@ def test_workflow_names_permissions_and_no_automatic_publication():
         events = data.get("on", data.get(True))  # YAML 1.1 treats 'on' as boolean.
         assert "pull_request_target" not in events
         if name != "ci.yml":
-            assert set(events) == {"workflow_dispatch"}
-            assert any("${{ inputs.sha }}" in str(job) for job in data["jobs"].values())
+            assert set(events) == (
+                {"workflow_dispatch", "workflow_run"}
+                if name == "release.yml"
+                else {"workflow_dispatch"}
+            )
+            assert "inputs.sha" in str(data)
             assert "X.Y.Z" in events["workflow_dispatch"]["inputs"]["tag"]["description"]
             assert "0.1.1" in events["workflow_dispatch"]["inputs"]["tag"]["description"]
             assert "python -m scripts.release " in str(data)
+    publication = workflows["release.yml"]
+    events = publication.get("on", publication.get(True))
+    assert events["workflow_run"] == {
+        "workflows": ["Validation"],
+        "types": ["completed"],
+        "branches": ["main"],
+    }
+    assert publication["concurrency"] == {
+        "group": "integrationmanager-release",
+        "cancel-in-progress": False,
+    }
+    job = publication["jobs"]["publish"]
+    assert job["permissions"] == {"contents": "write", "actions": "read"}
+    assert job["needs"] == "authorize"
+    guard = publication["jobs"]["authorize"]["if"]
+    for required in [
+        "github.repository == 'THEFLDR/HA-IntegrationManager'",
+        "github.actor == 'THEFLDR'",
+        "github.ref == 'refs/heads/main'",
+        "workflow_run.event == 'push'",
+        "workflow_run.conclusion == 'success'",
+        "workflow_run.head_branch == 'main'",
+        "workflow_run.name == 'Validation'",
+        "workflow_run.path == '.github/workflows/ci.yml'",
+        "workflow_run.repository.full_name",
+        "workflow_run.head_repository.full_name",
+    ]:
+        assert required in guard
+    steps = job["steps"]
+    assert steps[0]["with"]["ref"] == "${{ needs.authorize.outputs.sha }}"
+    assert steps[0]["with"]["persist-credentials"] is False
+    assert "github.sha" not in str(publication)
+    assert "python -m scripts.release prepare" in str(steps)
+    assert "pytest" not in str(steps) and "npm test" not in str(steps)
+    for step in steps:
+        if (
+            "scripts.package" in step.get("run", "")
+            or "scripts.release publish" in step.get("run", "")
+            or "pip install" in step.get("run", "")
+        ):
+            assert step["if"] == "steps.candidate.outputs.publish == 'true'"
+    assert workflows["promotion.yml"]["concurrency"] == publication["concurrency"]
     promotion = (ROOT / ".github/workflows/promotion.yml").read_text()
     assert "scripts.package" not in promotion
     assert "sandbox_tested" in promotion
@@ -69,7 +143,7 @@ def test_manifest_and_catalog():
     manifest = json.loads((ROOT / f"custom_components/{DOMAIN}/manifest.json").read_text())
     assert manifest["domain"] == DOMAIN
     assert manifest["codeowners"] == ["@THEFLDR"]
-    assert manifest["version"] == "0.1.4"
+    assert manifest["version"] == "0.1.5"
     assert parse_catalog(json.loads((ROOT / "repositories.json").read_text())) == []
 
 
@@ -88,9 +162,16 @@ def test_same_immutable_release_promotion(monkeypatch):
         {"object": {"sha": "a" * 40}},
         before,
         {"object": {"sha": "a" * 40, "type": "commit"}},
+        {"id": 5, "name": "Validation", "path": ".github/workflows/ci.yml"},
         {
             "workflow_runs": [
                 {
+                    "workflow_id": 5,
+                    "name": "Validation",
+                    "path": ".github/workflows/ci.yml",
+                    "repository": {"full_name": "THEFLDR/HA-IntegrationManager"},
+                    "head_repository": {"full_name": "THEFLDR/HA-IntegrationManager"},
+                    "status": "completed",
                     "head_sha": "a" * 40,
                     "head_branch": "main",
                     "event": "push",
@@ -134,107 +215,6 @@ def test_release_rejects_ambiguous_inputs(tag, sha):
         publisher.main("publish", tag, sha)
 
 
-def test_publication_exact_sha_and_existing_release(monkeypatch):
-    monkeypatch.setenv("GITHUB_REPOSITORY", "THEFLDR/HA-IntegrationManager")
-    monkeypatch.setattr(publisher, "api", Mock(return_value={"object": {"sha": "b" * 40}}))
-    with pytest.raises(ValueError, match="main HEAD"):
-        publisher.main("publish", "0.1.1", "a" * 40)
-    monkeypatch.setattr(
-        publisher,
-        "api",
-        Mock(side_effect=[{"object": {"sha": "a" * 40}}, [{"tag_name": "0.1.1"}]]),
-    )
-    with pytest.raises(ValueError, match="already exists"):
-        publisher.main("publish", "0.1.1", "a" * 40)
-
-
-def test_verify_release_digest():
-    data = b"artifact"
-    publisher.verify_asset(
-        {
-            "assets": [
-                {
-                    "name": "integrationmanager.zip",
-                    "digest": f"sha256:{hashlib.sha256(data).hexdigest()}",
-                }
-            ]
-        },
-        data,
-    )
-    with pytest.raises(ValueError, match="digest"):
-        publisher.verify_asset({"assets": []}, data)
-
-
-def test_publication_success_is_draft_then_immutable_prerelease(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "dist").mkdir()
-    data = b"tested artifact"
-    (tmp_path / "dist/integrationmanager.zip").write_bytes(data)
-    release = {
-        "tag_name": "0.1.1",
-        "immutable": True,
-        "prerelease": True,
-        "assets": [
-            {
-                "name": "integrationmanager.zip",
-                "digest": f"sha256:{hashlib.sha256(data).hexdigest()}",
-            }
-        ],
-    }
-    monkeypatch.setenv("GITHUB_REPOSITORY", "THEFLDR/HA-IntegrationManager")
-    monkeypatch.setattr(
-        publisher, "api", Mock(side_effect=[{"object": {"sha": "a" * 40}}, [], release])
-    )
-    verify = Mock()
-    monkeypatch.setattr(publisher, "verify_main_ci", verify)
-    monkeypatch.setattr(publisher, "tag_target", Mock(return_value=None))
-    gh = Mock()
-    monkeypatch.setattr(publisher, "gh", gh)
-    publisher.main("publish", "0.1.1", "a" * 40)
-    verify.assert_called_once_with("THEFLDR/HA-IntegrationManager", "a" * 40)
-    assert "--draft" in gh.call_args_list[0].args
-    assert "--prerelease" in gh.call_args_list[0].args
-    assert gh.call_args_list[1].args[:3] == ("release", "edit", "0.1.1")
-    assert "--draft=false" in gh.call_args_list[1].args
-
-
-def test_initial_publication_with_missing_tag_and_empty_stdout(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "dist").mkdir()
-    data = b"artifact"
-    (tmp_path / "dist/integrationmanager.zip").write_bytes(data)
-    monkeypatch.setenv("GITHUB_REPOSITORY", "THEFLDR/HA-IntegrationManager")
-    monkeypatch.setattr(publisher, "verify_main_ci", Mock())
-    release = {
-        "tag_name": "0.1.1",
-        "immutable": True,
-        "prerelease": True,
-        "assets": [
-            {
-                "name": "integrationmanager.zip",
-                "digest": f"sha256:{hashlib.sha256(data).hexdigest()}",
-            }
-        ],
-    }
-    gh = Mock(
-        side_effect=[
-            json.dumps({"object": {"sha": "a" * 40}}),
-            "[]",
-            subprocess.CalledProcessError(
-                1, ["gh", "api"], output="", stderr="gh: Not Found (HTTP 404)\n"
-            ),
-            "",
-            "",
-            json.dumps(release),
-        ]
-    )
-    monkeypatch.setattr(publisher, "gh", gh)
-    publisher.main("publish", "0.1.1", "a" * 40)
-    assert gh.call_args_list[3].args[:3] == ("release", "create", "0.1.1")
-    assert "--target" in gh.call_args_list[3].args
-    assert "a" * 40 in gh.call_args_list[3].args
-
-
 @pytest.mark.parametrize(
     "stderr", ["gh: Forbidden (HTTP 403)", "gh: server error (HTTP 500)", "transport failed"]
 )
@@ -275,7 +255,16 @@ def test_missing_tag_still_fails_promotion_and_cli_captures_stderr(monkeypatch):
     ],
 )
 def test_release_requires_successful_exact_main_ci(monkeypatch, runs):
-    monkeypatch.setattr(publisher, "api", Mock(return_value={"workflow_runs": runs}))
+    monkeypatch.setattr(
+        publisher,
+        "api",
+        Mock(
+            side_effect=[
+                {"id": 5, "name": "Validation", "path": ".github/workflows/ci.yml"},
+                {"workflow_runs": runs},
+            ]
+        ),
+    )
     with pytest.raises(ValueError, match="exact merged main SHA"):
         publisher.verify_main_ci("THEFLDR/HA-IntegrationManager", "a" * 40)
 

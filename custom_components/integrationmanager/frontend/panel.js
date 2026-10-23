@@ -178,7 +178,7 @@ export class IntegrationManagerPanel extends HTMLElement {
       button,select,summary{font:inherit}button,select{min-height:36px;max-width:100%;border:1px solid var(--divider-color,#ccc);border-radius:6px;padding:6px 10px;background:var(--secondary-background-color,#f1f1f1);color:var(--primary-text-color,#212121)}button,summary,select{cursor:pointer}button:disabled,select:disabled{opacity:.6;cursor:default}button:hover:not(:disabled){background:var(--divider-color,#ddd)}:is(button,select,summary,a):focus-visible{outline:2px solid var(--primary-color,#03a9f4);outline-offset:2px}
       a{color:var(--primary-color,#03a9f4);text-decoration:none}a:hover{text-decoration:underline}
       label{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin:6px 0}small{display:block;color:var(--secondary-text-color,#727272);margin-top:4px}.entities{display:grid;gap:4px;margin-top:8px}.entity-action{background:transparent;border-color:transparent;color:var(--primary-color,#03a9f4);padding:4px;min-height:32px}.entities>div{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.entities small{flex-basis:100%}
-      .table-scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;text-align:left;min-width:620px}caption{text-align:left;color:var(--secondary-text-color,#727272);padding-bottom:8px}th,td{padding:8px;vertical-align:top;border-bottom:1px solid var(--divider-color,#ddd)}th{font-weight:500}td .entity-action{min-height:28px;padding:2px 4px}td small .entity-action{min-height:24px;padding:0 4px}tbody tr:last-child td{border:0}td:first-child{min-width:150px}summary{padding:4px 0;white-space:nowrap}details .actions{margin-top:8px}details .entities{min-width:220px}summary::marker{color:var(--primary-color,#03a9f4)}.catalog-row{display:flex;align-items:center;justify-content:space-between;gap:8px;border-top:1px solid var(--divider-color,#ddd);padding:8px 0}.catalog-row:first-of-type{border:0}[role=status]{white-space:pre-wrap;min-height:1em}
+      .table-scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;text-align:left;min-width:760px}caption{text-align:left;color:var(--secondary-text-color,#727272);padding-bottom:8px}th,td{padding:8px;vertical-align:top;border-bottom:1px solid var(--divider-color,#ddd)}th{font-weight:500}td .entity-action{min-height:28px;padding:2px 4px}tbody tr:last-child td{border:0}td:first-child{min-width:150px}summary{padding:4px 0;white-space:nowrap}details .actions{margin-top:8px}details .entities{min-width:220px}summary::marker{color:var(--primary-color,#03a9f4)}.catalog-row{display:flex;align-items:center;justify-content:space-between;gap:8px;border-top:1px solid var(--divider-color,#ddd);padding:8px 0}.catalog-row:first-of-type{border:0}[role=status]{white-space:pre-wrap;min-height:1em}
       @media(max-width:650px){:host{padding:8px}.settings{grid-template-columns:minmax(0,1fr)}section{padding:10px}th,td{padding:6px}}`;
     const header = this.node("header", undefined, root);
     const image = this.node("img", undefined, header);
@@ -221,7 +221,7 @@ export class IntegrationManagerPanel extends HTMLElement {
     const table = this.node("table", undefined, scroll);
     this.node("caption", "Live native entity states. Not provided means no matching entity is registered.", table);
     const headings = this.node("tr", undefined, this.node("thead", undefined, table));
-    for (const name of ["Integration", "Installed version", "Effective channel", "Health", "Update", "Details / actions"]) this.node("th", name, headings).setAttribute("scope", "col");
+    for (const name of ["Integration", "Installed version", "Release Channel", "Release Channel Mode", "Health", "Update", "Details / actions"]) this.node("th", name, headings).setAttribute("scope", "col");
     const body = this.node("tbody", undefined, table);
     for (const item of this.items) {
       const row = this.node("tr", undefined, body);
@@ -234,13 +234,11 @@ export class IntegrationManagerPanel extends HTMLElement {
         link.href = `/config/devices/device/${encodeURIComponent(item.device_id)}`;
       } else name.textContent = item.name;
       this.node("td", item.version || "Unknown", row);
-      for (const kind of ["release_channel", "health", "update"]) {
+      for (const kind of ["release_channel", "release_channel_mode", "health", "update"]) {
         const cell = this.node("td", undefined, row);
-        this.entityState(item.entities.find((entity) => this.entityKind(entity) === kind), cell);
-        if (kind === "release_channel") {
-          const mode = item.entities.find((entity) => this.entityKind(entity) === "release_channel_mode");
-          if (mode) this.entityState(mode, this.node("small", undefined, cell));
-        }
+        const entity = item.entities.find((entity) => this.entityKind(entity) === kind);
+        if (!entity && kind === "release_channel_mode") this.node("span", "—", cell);
+        else this.entityState(entity, cell);
       }
       const details = this.node("details", undefined, this.node("td", undefined, row));
       details.dataset.domain = item.domain;

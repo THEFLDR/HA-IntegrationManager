@@ -34,7 +34,7 @@ test("friendly names, safe text and native entity controls", () => {
 });
 
 test("manager cannot uninstall itself; catalog uses integration name", () => {
-  panel.items = [{ name: "Integration Manager", domain: "integrationmanager", version: "0.1.4", files_present: true, entities: [] }];
+  panel.items = [{ name: "Integration Manager", domain: "integrationmanager", version: "0.1.5", files_present: true, entities: [] }];
   panel.catalog = [{ name: "Friendly Integration", repository: "THEFLDR/HA-Slug", domain: "sample", installed: false }];
   panel.render();
   const text = [...panel.shadowRoot.childNodes].map((node) => node.textContent).join("");
@@ -180,13 +180,15 @@ test("compact list scales with closed accessible details and no invented statuse
   panel.render();
   const table = panel.shadowRoot.querySelector("table");
   assert.deepEqual([...table.querySelectorAll("th")].map((cell) => cell.textContent),
-    ["Integration", "Installed version", "Effective channel", "Health", "Update", "Details / actions"]);
+    ["Integration", "Installed version", "Release Channel", "Release Channel Mode", "Health", "Update", "Details / actions"]);
   assert.equal(table.querySelectorAll("tbody tr").length, 80);
   assert.equal(table.querySelectorAll("details[open]").length, 0);
   assert(table.querySelector("summary").getAttribute("aria-label").includes("Sample 0"));
   assert.equal(table.querySelectorAll("td")[2].textContent, "Not provided");
-  assert.equal(table.querySelectorAll("td")[3].textContent, "Not provided");
+  assert.equal(table.querySelectorAll("td")[3].textContent, "—");
   assert.equal(table.querySelectorAll("td")[4].textContent, "Not provided");
+  assert.equal(table.querySelectorAll("td")[5].textContent, "Not provided");
+  assert.equal(table.querySelectorAll("td")[3].querySelector("button"), null);
   assert.equal(panel.shadowRoot.querySelector(".table-scroll").getAttribute("tabindex"), "0");
   assert.equal(panel.shadowRoot.querySelector(".table-scroll").getAttribute("role"), "region");
 });
@@ -212,7 +214,7 @@ test("expanded details survive refresh and keep native entity and removal action
 
 test("manager settings own its controls while list retains a compact summary", async () => {
   const entity = { entity_id: "update.native", name: "Manager update", kind: "update" };
-  panel.items = [{ domain: "integrationmanager", name: "Integration Manager", version: "0.1.4", files_present: true, entities: [entity] }];
+  panel.items = [{ domain: "integrationmanager", name: "Integration Manager", version: "0.1.5", files_present: true, entities: [entity] }];
   panel.managerMode = "managed";
   panel.render();
   const manager = panel.shadowRoot.querySelector("[data-settings=manager]");
@@ -262,7 +264,7 @@ test("each table state opens its native entity dialog with an accessible live la
     { entity_id: "binary_sensor.health", name: "Health", kind: "health", disabled: true },
     { entity_id: "update.native", name: "Update", kind: "update", hidden: true },
   ];
-  panel.items = [{ domain: "integrationmanager", name: "Integration Manager", entities, device_id: "actual-service-id", version: "0.1.4", files_present: true }];
+  panel.items = [{ domain: "integrationmanager", name: "Integration Manager", entities, device_id: "actual-service-id", version: "0.1.5", files_present: true }];
   panel.render();
   const opened = [];
   panel.addEventListener("hass-more-info", (event) => {
@@ -271,6 +273,11 @@ test("each table state opens its native entity dialog with an accessible live la
   });
   const buttons = [...panel.shadowRoot.querySelectorAll("tbody [data-entity]")];
   assert.equal(buttons.length, 4);
+  const cells = [...panel.shadowRoot.querySelectorAll("tbody tr > td")];
+  assert.equal(cells.length, 7);
+  assert.equal(cells[2].querySelectorAll("button").length, 1);
+  assert.equal(cells[3].querySelectorAll("button").length, 1);
+  assert.equal(cells[3].querySelector("button").dataset.entity, "sensor.mode");
   for (const button of buttons) {
     assert.equal(button.tagName, "BUTTON");
     assert(button.getAttribute("aria-label").includes(button.textContent));
@@ -301,4 +308,12 @@ test("integration names link only to registry-supplied destinations and settings
   assert.equal(settings.querySelectorAll("[data-entity]").length, 0);
   assert(!settings.textContent.includes("Installed version"));
   assert(!settings.textContent.includes("Effective Release Channel"));
+});
+
+// HA sidebar icons accept path providers, not the raster image used here.
+test("dashboard uses the approved PNG through the existing static route", () => {
+  panel.render();
+  const image = panel.shadowRoot.querySelector("header img");
+  assert.equal(image.getAttribute("src"), "/integrationmanager_static/icon.png");
+  assert.equal(panel.shadowRoot.querySelectorAll("header img").length, 1);
 });

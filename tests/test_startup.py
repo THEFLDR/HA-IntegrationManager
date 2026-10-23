@@ -1,6 +1,7 @@
 """Exercise actual HA loading, config entries and native entity platforms."""
 
 import socket
+from importlib.util import find_spec
 from unittest.mock import AsyncMock
 
 import aiohttp
@@ -96,7 +97,7 @@ async def test_actual_home_assistant_startup(tmp_path, monkeypatch, offline, leg
     )
     instance = HomeAssistant(str(tmp_path))
     package = build(tmp_path / "package").read_bytes()
-    FileStore(str(tmp_path)).install(DOMAIN, validate_archive(package, DOMAIN, "0.1.4", HA_VERSION))
+    FileStore(str(tmp_path)).install(DOMAIN, validate_archive(package, DOMAIN, "0.1.5", HA_VERSION))
     instance.config.skip_pip = True
     loader.async_setup(instance)
     with socket.socket() as reservation:
@@ -150,9 +151,12 @@ async def test_actual_home_assistant_startup(tmp_path, monkeypatch, offline, leg
         service = services[0]
         assert service.entry_type == dr.DeviceEntryType.SERVICE
         assert service.identifiers == {(DOMAIN, config_entry.entry_id)}
-        assert service.config_entry_id == config_entry.entry_id
+        if hasattr(service, "config_entry_id"):
+            assert service.config_entry_id == config_entry.entry_id
+        else:
+            assert service.config_entries == {config_entry.entry_id}
         assert service.name == NAME and service.manufacturer is None
-        assert service.sw_version == "0.1.4"
+        assert service.sw_version == "0.1.5"
         registry = er.async_get(instance)
         registered = er.async_entries_for_config_entry(registry, config_entry.entry_id)
         assert len(registered) == 5
@@ -222,6 +226,22 @@ async def test_actual_home_assistant_startup(tmp_path, monkeypatch, offline, leg
             async with session.get(f"http://127.0.0.1:{port}/{DOMAIN}_static/panel.js") as response:
                 assert response.status == 200
                 assert "integrationmanager-panel" in await response.text()
+            # Only public artwork/code is served on the existing static route;
+            # admin commands remain behind authenticated WebSocket access.
+            for image in ("icon.png", "approved-icon.svg"):
+                async with session.get(
+                    f"http://127.0.0.1:{port}/{DOMAIN}_static/{image}"
+                ) as response:
+                    assert response.status == 200
+                    assert (
+                        await response.read()
+                        == (
+                            tmp_path / "custom_components" / DOMAIN / "frontend" / image
+                        ).read_bytes()
+                    )
+            panel = instance.data["frontend_panels"][DOMAIN]
+            assert panel.sidebar_icon == "mdi:puzzle"
+            assert panel.require_admin is True
             for admin in (True, False):
                 user = await instance.auth.async_create_user(
                     "Test admin" if admin else "Test user",
@@ -236,13 +256,18 @@ async def test_actual_home_assistant_startup(tmp_path, monkeypatch, offline, leg
                         f"http://127.0.0.1:{port}/api/brands/integration/{DOMAIN}/{image}",
                         headers={"Authorization": f"Bearer {access}"},
                     ) as response:
-                        assert response.status == 200
-                        assert (
-                            await response.read()
-                            == (
-                                tmp_path / "custom_components" / DOMAIN / "brand/icon.png"
-                            ).read_bytes()
-                        )
+                        # The native custom-brands endpoint is absent on the
+                        # declared HA minimum; the panel PNG still works there.
+                        if find_spec("homeassistant.components.brands") is None:
+                            assert response.status == 404
+                        else:
+                            assert response.status == 200
+                            assert (
+                                await response.read()
+                                == (
+                                    tmp_path / "custom_components" / DOMAIN / "brand/icon.png"
+                                ).read_bytes()
+                            )
                 async with session.ws_connect(f"http://127.0.0.1:{port}/api/websocket") as ws:
                     assert (await ws.receive_json())["type"] == "auth_required"
                     await ws.send_json({"type": "auth", "access_token": access})
