@@ -1,12 +1,22 @@
 """Native service registry entry, using the same mechanism as Google Translate TTS."""
 
+import logging
 from collections.abc import Mapping
 
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
-from .const import DOMAIN, NAME, OWNER, VERSION
+from .const import DOMAIN, NAME, VERSION
+
+_LOGGER = logging.getLogger(__name__)
+ENTITY_DOMAINS = {
+    "health": "binary_sensor",
+    "update": "update",
+    "release_channel": "sensor",
+    "release_channel_mode": "sensor",
+    "last_update_check": "sensor",
+}
 
 
 def service_info(entry):
@@ -14,7 +24,7 @@ def service_info(entry):
         entry_type=dr.DeviceEntryType.SERVICE,
         identifiers={(DOMAIN, entry.entry_id)},
         name=NAME,
-        manufacturer=OWNER,
+        manufacturer=None,
         model=NAME,
         sw_version=VERSION,
     )
@@ -48,10 +58,7 @@ def async_register_service(hass, entry):
             raise HomeAssistantError(
                 "Cannot register Integration Manager service: shared registry entry"
             )
-    unique_ids = {
-        f"{entry.entry_id}_{suffix}"
-        for suffix in ("health", "update", "release_channel", "release_channel_mode")
-    }
+    unique_ids = {f"{entry.entry_id}_{suffix}" for suffix in ENTITY_DOMAINS}
     owned = [
         entity
         for entity in er.async_entries_for_config_entry(entities, entry.entry_id)
@@ -67,3 +74,31 @@ def async_register_service(hass, entry):
         if entity.device_id != service.id:
             entities.async_update_entity(entity.entity_id, device_id=service.id)
     return service
+
+
+def async_migrate_entity_ids(hass, entry):
+    """Only exact historical defaults qualify; custom IDs and collisions stay put."""
+    registry = er.async_get(hass)
+    warnings = []
+    for suffix, entity_domain in ENTITY_DOMAINS.items():
+        entity_id = registry.async_get_entity_id(
+            entity_domain, DOMAIN, f"{entry.entry_id}_{suffix}"
+        )
+        entity = registry.async_get(entity_id) if entity_id else None
+        canonical = f"{entity_domain}.{DOMAIN}_{suffix}"
+        if not entity or entity.config_entry_id != entry.entry_id:
+            continue
+        if entity.entity_id != f"{entity_domain}.integration_manager_{suffix}":
+            continue
+        if registry.async_get(canonical) or hass.states.get(canonical):
+            warnings.append(f"Cannot migrate {entity_id}: {canonical} is in use")
+        else:
+            registry.async_update_entity(entity_id, new_entity_id=canonical)
+            _LOGGER.warning(
+                "Renamed default entity %s to %s; update references in automations and dashboards",
+                entity_id,
+                canonical,
+            )
+    for warning in warnings:
+        _LOGGER.warning(warning)
+    return warnings

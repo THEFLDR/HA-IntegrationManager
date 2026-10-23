@@ -184,7 +184,7 @@ async def test_upgrade_012_service_registration_is_idempotent(hass, monkeypatch,
     again = async_register_service(hass, current)
     assert again.id == service.id and again.name_by_user == "My service"
     assert again.entry_type == dr.DeviceEntryType.SERVICE
-    assert again.manufacturer == "THEFLDR" and again.name == "Integration Manager"
+    assert again.manufacturer is None and again.name == "Integration Manager"
     assert len(dr.async_entries_for_config_entry(devices, current.entry_id)) == 1
     for entity_id, old in before.items():
         upgraded = registry.async_get(entity_id)

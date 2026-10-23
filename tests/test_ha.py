@@ -101,6 +101,13 @@ async def test_registry_discovery_including_unlisted(hass, tmp_path, monkeypatch
     assert result[1]["entities"][0]["attributes"]["effective_channel"] == RC
     assert registry.async_get(update.entity_id).disabled is False
     assert registry.async_get(update.entity_id).hidden is False
+    assert result[0]["device_id"] == device.id
+    assert result[1]["device_id"] is None
+    second_device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=first.entry_id, identifiers={("sample", "another")}
+    )
+    assert second_device.id != device.id
+    assert (await overview(hass, store, []))[0]["device_id"] is None
 
 
 def test_inventory_ignores_unsafe_and_bad_files(tmp_path):
@@ -187,15 +194,17 @@ async def test_native_entities_and_update_errors(hass, runtime):
     runtime.self_update = AsyncMock()
     entity.async_write_ha_state = Mock()
     await entity.async_install("0.2.0", False)
-    runtime.self_update.assert_awaited_once_with("0.2.0")
+    runtime.self_update.assert_awaited_once_with("0.2.0", backup=False)
     await setup_health(hass, runtime.entry, add)
     health = add.call_args.args[0][0]
     assert health.coordinator is entity.coordinator
+    assert not health.available
+    runtime.ready = True
+    runtime.health.checks = dict.fromkeys(runtime.health.checks, "ok")
     assert health.available and not health.is_on
-    health.coordinator.last_update_success = False
-    health.coordinator.last_exception = ValueError("offline")
+    runtime.health.outcome("release_discovery", ValueError("invalid releases"))
     assert health.is_on
-    assert health.extra_state_attributes["error"] == "offline"
+    assert health.extra_state_attributes["last_error"] == "invalid releases"
 
 
 async def test_restart_notification_is_manual(hass, runtime):

@@ -1,6 +1,7 @@
 """Health of Manager's own release discovery, never of other integrations."""
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
@@ -25,6 +26,8 @@ class ManagerHealth(CoordinatorEntity, BinarySensorEntity):
 
     def __init__(self, coordinator, runtime):
         super().__init__(coordinator)
+        self.runtime = runtime
+        self.entity_id = f"binary_sensor.{DOMAIN}_health"
         self._attr_unique_id = f"{runtime.entry.entry_id}_health"
         self._attr_device_info = service_info(runtime.entry)
 
@@ -32,19 +35,22 @@ class ManagerHealth(CoordinatorEntity, BinarySensorEntity):
     def suggested_object_id(self):
         return "health"
 
+    async def async_added_to_hass(self):
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass, f"{DOMAIN}_runtime_changed", self.async_write_ha_state
+            )
+        )
+
     @property
     def available(self):
-        return True
+        return self.runtime.ready and self.runtime.health.available
 
     @property
     def is_on(self):
-        return not self.coordinator.last_update_success
+        return bool(self.runtime.health.failed_checks)
 
     @property
     def extra_state_attributes(self):
-        return {
-            "scope": "Integration Manager release discovery",
-            "error": str(self.coordinator.last_exception)
-            if self.coordinator.last_exception
-            else None,
-        }
+        return {"scope": "Integration Manager health", **self.runtime.health.attributes}

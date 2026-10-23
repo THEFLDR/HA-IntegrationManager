@@ -262,7 +262,10 @@ async def test_failed_file_change_reports_failure_and_tracks_changed_files(runti
     assert not runtime.lock.locked()
 
 
-async def test_cleanup_notification_does_not_claim_configuration_preserved(runtime, monkeypatch):
+async def test_cleanup_notification_does_not_claim_configuration_preserved(
+    hass, runtime, monkeypatch
+):
+    runtime.hass = hass
     notify = Mock()
     monkeypatch.setattr("homeassistant.components.persistent_notification.async_create", notify)
     runtime._restart_notice(configuration_removed=True)

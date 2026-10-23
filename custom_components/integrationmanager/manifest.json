@@ -1,13 +1,14 @@
 {
   "domain": "integrationmanager",
   "name": "Integration Manager",
+  "after_dependencies": ["backup"],
   "codeowners": ["@THEFLDR"],
   "config_flow": true,
-  "dependencies": ["http", "frontend", "panel_custom", "websocket_api", "persistent_notification"],
+  "dependencies": ["http", "frontend", "panel_custom", "websocket_api", "persistent_notification", "repairs"],
   "documentation": "https://github.com/THEFLDR/HA-IntegrationManager",
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/THEFLDR/HA-IntegrationManager/issues",
   "requirements": [],
-  "version": "0.1.3"
+  "version": "0.1.4"
 }

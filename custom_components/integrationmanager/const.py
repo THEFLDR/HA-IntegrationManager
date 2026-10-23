@@ -2,7 +2,7 @@
 
 DOMAIN = "integrationmanager"
 NAME = "Integration Manager"
-VERSION = "0.1.3"
+VERSION = "0.1.4"
 OWNER = "THEFLDR"
 REPOSITORY = f"{OWNER}/HA-IntegrationManager"
 CATALOG_URL = f"https://raw.githubusercontent.com/{REPOSITORY}/main/repositories.json"
