@@ -52,6 +52,7 @@ export class IntegrationManagerPanel extends HTMLElement {
       const overview = await this.call("overview");
       this.items = overview.integrations;
       this.channel = overview.channel;
+      this.managerChannel = overview.manager_channel;
       this.managerMode = overview.manager_channel_mode || "managed";
       this.managerOverride = overview.manager_channel_override || "stable";
       this.restart = overview.restart_required;
@@ -120,88 +121,155 @@ export class IntegrationManagerPanel extends HTMLElement {
     }
   }
 
+  entityKind(entity) {
+    return entity.kind || (entity.entity_id.startsWith("update.") ? "update" : "");
+  }
+
+  entityState(entity, parent) {
+    const state = this.node("span", "Not provided", parent);
+    if (entity) {
+      state.dataset.entity = entity.entity_id;
+      state.dataset.kind = this.entityKind(entity);
+    }
+    return state;
+  }
+
+  entities(entities, parent, labels = {}) {
+    const list = this.node("div", undefined, parent);
+    list.className = "entities";
+    if (!entities.length) this.node("small", "No matching native entities are registered.", list);
+    for (const entity of entities) {
+      const line = this.node("div", undefined, list);
+      const action = this.button(labels[this.entityKind(entity)] || entity.name, line, () => this.dispatchEvent(new CustomEvent("hass-more-info", { detail: { entityId: entity.entity_id }, bubbles: true, composed: true })));
+      action.className = "entity-action";
+      this.entityState(entity, line);
+      if (entity.disabled || entity.hidden) this.node("small", "This native entity is disabled or hidden in its registry settings.", line);
+    }
+  }
+
+  channelSelect(label, value, parent, onChange, options = [["stable", "Stable"], ["release_candidate", "Release Candidate"]]) {
+    const wrapper = this.node("label", label, parent);
+    const select = this.node("select", undefined, wrapper);
+    for (const [key, text] of options) {
+      const option = this.node("option", text, select);
+      option.value = key;
+      option.selected = value === key;
+    }
+    select.disabled = this.busy || this.restart;
+    select.addEventListener("change", () => onChange(select.value));
+    return select;
+  }
+
   render() {
     const root = this.shadowRoot;
+    const expanded = new Set([...root.querySelectorAll("details[open]")].map((details) => details.dataset.domain));
     root.replaceChildren();
     const style = this.node("style", undefined, root);
-    style.textContent = `:host{display:block;padding:24px;color:var(--primary-text-color);font-family:var(--paper-font-body1_-_font-family, sans-serif)}header{display:flex;align-items:center;gap:16px}img{width:64px;height:64px}section{background:var(--card-background-color);border:1px solid var(--divider-color);border-radius:12px;padding:20px;margin:18px 0}button,select{font:inherit;padding:10px;margin:4px;border-radius:6px;cursor:pointer}button:disabled{cursor:wait}li{margin:12px 0}small{display:block;color:var(--secondary-text-color)}[role=status]{white-space:pre-wrap}h1{font-size:24px}ul{padding-left:20px}`;
+    // Standard HTML controls work in custom panels without lazy-loading private HA elements.
+    style.textContent = `
+      :host{display:block;box-sizing:border-box;padding:16px;color:var(--primary-text-color,#212121);background:var(--primary-background-color,#fafafa);font-family:var(--ha-font-family-body,Roboto,sans-serif);font-size:var(--ha-font-size-m,14px);color-scheme:light dark}
+      *{box-sizing:border-box}header,.heading,.actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}header img{width:36px;height:36px}h1{font-size:22px;margin:0}h2{font-size:17px;margin:0 0 8px}h3{font-size:15px;margin:0}p{margin:8px 0}
+      section{background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#ddd);border-radius:var(--ha-card-border-radius,12px);padding:12px;margin:12px 0}.settings{display:grid;align-items:start;grid-template-columns:minmax(180px,1fr) minmax(280px,2fr);gap:12px}.settings section{margin:0}
+      button,select,summary{font:inherit}button,select{min-height:36px;max-width:100%;border:1px solid var(--divider-color,#ccc);border-radius:6px;padding:6px 10px;background:var(--secondary-background-color,#f1f1f1);color:var(--primary-text-color,#212121)}button,summary,select{cursor:pointer}button:disabled,select:disabled{opacity:.6;cursor:default}button:hover:not(:disabled){background:var(--divider-color,#ddd)}:is(button,select,summary):focus-visible{outline:2px solid var(--primary-color,#03a9f4);outline-offset:2px}
+      label{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin:6px 0}small{display:block;color:var(--secondary-text-color,#727272);margin-top:4px}.entities{display:grid;gap:4px;margin-top:8px}.settings .entities{display:flex;flex-wrap:wrap;gap:4px 16px}.entity-action{background:transparent;border-color:transparent;color:var(--primary-color,#03a9f4);padding:4px;min-height:32px}.entities>div{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.entities small{flex-basis:100%}
+      .table-scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;text-align:left;min-width:620px}caption{text-align:left;color:var(--secondary-text-color,#727272);padding-bottom:8px}th,td{padding:8px;vertical-align:top;border-bottom:1px solid var(--divider-color,#ddd)}th{font-weight:500}tbody tr:last-child td{border:0}td:first-child{min-width:150px}summary{padding:4px 0;white-space:nowrap}details .actions{margin-top:8px}details .entities{min-width:220px}summary::marker{color:var(--primary-color,#03a9f4)}.catalog-row{display:flex;align-items:center;justify-content:space-between;gap:8px;border-top:1px solid var(--divider-color,#ddd);padding:8px 0}.catalog-row:first-of-type{border:0}[role=status]{white-space:pre-wrap;min-height:1em}
+      @media(max-width:650px){:host{padding:8px}.settings{grid-template-columns:minmax(0,1fr)}section{padding:10px}th,td{padding:6px}}`;
     const header = this.node("header", undefined, root);
     const image = this.node("img", undefined, header);
     image.src = "/integrationmanager_static/icon.png";
-    image.alt = "Integration Manager";
+    image.alt = "";
     this.node("h1", "Integration Manager", header);
-    this.node("p", this.message || "", root).setAttribute("role", "status");
+    this.button("Refresh", header, () => this.refresh());
+    const feedback = this.node("p", this.message || "", root);
+    feedback.setAttribute("role", "status");
+    feedback.setAttribute("aria-live", "polite");
     if (this.restart) this.node("p", "Restart required. Restart Home Assistant manually to apply file changes.", root);
-    const settings = this.node("section", undefined, root);
-    const label = this.node("label", "Global release channel: ", settings);
-    const select = this.node("select", undefined, label);
-    for (const [value, text] of [["stable", "Stable"], ["release_candidate", "Release Candidate"]]) {
-      const option = this.node("option", text, select);
-      option.value = value;
-      option.selected = this.channel === value;
-    }
-    select.disabled = this.busy || this.restart;
-    select.addEventListener("change", () => this.perform("channel", { channel: select.value }));
-    const modeLabel = this.node("label", "Integration Manager release channel mode: ", settings);
-    const mode = this.node("select", undefined, modeLabel);
-    for (const [value, text] of [["managed", "Managed"], ["default", "Default"], ["override", "Override"]]) {
-      const option = this.node("option", text, mode);
-      option.value = value;
-      option.selected = (this.managerMode || "managed") === value;
-    }
-    mode.disabled = this.busy || this.restart;
-    mode.addEventListener("change", () => this.perform("manager_channel", {
-      mode: mode.value,
-      ...(mode.value === "override" ? { channel: this.managerOverride || "stable" } : {}),
-    }));
-    this.node("small", "Managed follows the global channel. Default always uses Stable. Override uses the channel selected below.", settings);
+    const settings = this.node("div", undefined, root);
+    settings.className = "settings";
+    const global = this.node("section", undefined, settings);
+    global.setAttribute("aria-labelledby", "global-heading");
+    global.dataset.settings = "global";
+    this.node("h2", "Global Settings", global).id = "global-heading";
+    this.channelSelect("Global Release Channel", this.channel, global, (channel) => this.perform("channel", { channel }));
+    this.node("small", "Used by integrations in Managed mode.", global);
+    const manager = this.node("section", undefined, settings);
+    manager.setAttribute("aria-labelledby", "manager-heading");
+    manager.dataset.settings = "manager";
+    this.node("h2", "Integration Manager", manager).id = "manager-heading";
+    this.channelSelect("Release Channel Mode", this.managerMode || "managed", manager, (mode) => this.perform("manager_channel", {
+      mode, ...(mode === "override" ? { channel: this.managerOverride || "stable" } : {}),
+    }), [["managed", "Managed"], ["default", "Default"], ["override", "Override"]]);
     if (this.managerMode === "override") {
-      const overrideLabel = this.node("label", "Integration Manager override channel: ", settings);
-      const override = this.node("select", undefined, overrideLabel);
-      for (const [value, text] of [["stable", "Stable"], ["release_candidate", "Release Candidate"]]) {
-        const option = this.node("option", text, override);
-        option.value = value;
-        option.selected = this.managerOverride === value;
-      }
-      override.disabled = this.busy || this.restart;
-      override.addEventListener("change", () => this.perform("manager_channel", { mode: "override", channel: override.value }));
+      this.channelSelect("Override Channel", this.managerOverride, manager, (channel) => this.perform("manager_channel", { mode: "override", channel }));
     }
-    this.button("Refresh", settings, () => this.refresh());
-    this.button("Check for Updates", settings, () => this.perform("check_updates"));
+    this.node("small", "Managed follows Global Settings. Default uses Stable. Override uses its own channel.", manager);
+    const own = this.items.find((item) => item.domain === "integrationmanager");
+    this.node("small", `Installed version: ${own?.version || "Unknown"}`, manager);
+    if (!own?.entities.some((entity) => this.entityKind(entity) === "release_channel")) {
+      const effective = this.node("p", "Effective Release Channel: ", manager);
+      this.node("span", { stable: "Stable", release_candidate: "Release Candidate" }[this.managerChannel] || "Unavailable", effective);
+    }
+    this.entities(own?.entities || [], manager, { release_channel: "Effective Release Channel" });
+    this.button("Check for Updates", manager, () => this.perform("check_updates"));
     const installed = this.node("section", undefined, root);
-    this.node("h2", "Installed custom integrations", installed);
-    this.node("p", "Native Health, Update and Release Channel entities are shown when their integration provides them. Open an entity to use its native controls.", installed);
+    installed.setAttribute("aria-labelledby", "installed-heading");
+    const heading = this.node("div", undefined, installed);
+    heading.className = "heading";
+    this.node("h2", "Installed custom integrations", heading).id = "installed-heading";
+    const scroll = this.node("div", undefined, installed);
+    scroll.className = "table-scroll";
+    scroll.tabIndex = 0;
+    scroll.setAttribute("role", "region");
+    scroll.setAttribute("aria-label", "Installed integrations; scroll horizontally on narrow screens");
+    const table = this.node("table", undefined, scroll);
+    this.node("caption", "Live native entity states. Not provided means no matching entity is registered.", table);
+    const headings = this.node("tr", undefined, this.node("thead", undefined, table));
+    for (const name of ["Integration", "Installed version", "Effective channel", "Health", "Update", "Details / actions"]) this.node("th", name, headings).setAttribute("scope", "col");
+    const body = this.node("tbody", undefined, table);
     for (const item of this.items) {
-      const row = this.node("section", undefined, installed);
-      this.node("h3", item.name, row);
-      this.node("small", `${item.version || "Version unknown"} · ${item.domain}${item.files_present ? "" : " · Files removed"}`, row);
-      if (!item.entities.length) this.node("p", "No matching native entities are registered.", row);
-      for (const entity of item.entities) {
-        const line = this.node("p", undefined, row);
-        this.button(entity.name, line, () => this.dispatchEvent(new CustomEvent("hass-more-info", { detail: { entityId: entity.entity_id }, bubbles: true, composed: true })));
-        const state = this.node("span", entity.state, line);
-        state.dataset.entity = entity.entity_id;
-        state.dataset.kind = entity.kind || (entity.entity_id.startsWith("update.") ? "update" : "");
-        if (entity.disabled || entity.hidden) this.node("small", "This native entity is disabled or hidden in its registry settings.", line);
+      const row = this.node("tr", undefined, body);
+      row.dataset.integration = item.domain;
+      this.node("h3", item.name, this.node("td", undefined, row));
+      this.node("td", item.version || "Unknown", row);
+      for (const kind of ["release_channel", "health", "update"]) {
+        const cell = this.node("td", undefined, row);
+        this.entityState(item.entities.find((entity) => this.entityKind(entity) === kind), cell);
+        if (kind === "release_channel") {
+          const mode = item.entities.find((entity) => this.entityKind(entity) === "release_channel_mode");
+          if (mode) this.entityState(mode, this.node("small", undefined, cell));
+        }
       }
-      if (item.domain !== "integrationmanager") {
-        if (item.files_present) this.button("Remove files", row, () => {
+      const details = this.node("details", undefined, this.node("td", undefined, row));
+      details.dataset.domain = item.domain;
+      if (expanded.has(item.domain)) details.setAttribute("open", "");
+      const summary = this.node("summary", "Details", details);
+      summary.setAttribute("aria-label", `Details and actions for ${item.name}`);
+      this.node("small", `${item.domain}${item.files_present ? "" : " · Files removed"}`, details);
+      if (item.domain === "integrationmanager") this.node("p", "Use the Integration Manager settings above for native entity controls and updates.", details);
+      else {
+        this.entities(item.entities, details);
+        const actions = this.node("div", undefined, details);
+        actions.className = "actions";
+        if (item.files_present) this.button("Remove files", actions, () => {
           if (window.confirm(`Remove ${item.name} files? Configuration and data are preserved. A manual HA restart is required.`)) this.perform("remove", { domain: item.domain });
         });
-        this.button("Clean up HA configuration…", row, () => {
+        this.button("Clean up HA configuration…", actions, () => {
           const confirmation = window.prompt(`Remove HA configuration entries owned by ${item.name}? Integration removal hooks may clean their own data. Shared files, YAML, backups and uncertain data remain. This cannot guarantee zero residue. Type REMOVE ${item.domain} CONFIGURATION to confirm.`);
           if (confirmation === `REMOVE ${item.domain} CONFIGURATION`) this.perform("cleanup", { domain: item.domain, confirmation });
         });
       }
     }
+    if (!this.items.length) this.node("p", "No custom integrations found.", installed);
     const catalog = this.node("section", undefined, root);
     this.node("h2", "Available integrations", catalog);
     if (this.catalogError) this.node("p", `Catalog unavailable: ${this.catalogError}`, catalog);
     else if (!this.catalog.length) this.node("p", "The catalog is empty.", catalog);
     for (const item of this.catalog) {
-      const row = this.node("section", undefined, catalog);
-      this.node("h3", item.name, row);
-      this.node("small", item.installed ? `Installed · ${item.version || "Version unknown"}` : "Not installed", row);
+      const row = this.node("div", undefined, catalog);
+      row.className = "catalog-row";
+      const description = this.node("div", undefined, row);
+      this.node("h3", item.name, description);
+      this.node("small", item.installed ? `Installed · ${item.version || "Version unknown"}` : "Not installed", description);
       if (!item.installed) this.button(`Install ${item.name}`, row, () => {
         if (window.confirm(`Install ${item.name} from the selected release channel? A manual HA restart is required.`)) this.perform("install", { domain: item.domain });
       });

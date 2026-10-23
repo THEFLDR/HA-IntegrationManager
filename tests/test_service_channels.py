@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import EntityCategory
@@ -11,6 +12,7 @@ from custom_components.integrationmanager.channel import get_global_channel, res
 from custom_components.integrationmanager.config_flow import OptionsFlow
 from custom_components.integrationmanager.const import DOMAIN, RC, STABLE
 from custom_components.integrationmanager.sensor import ChannelModeSensor, ChannelSensor
+from custom_components.integrationmanager.service import async_register_service
 from custom_components.integrationmanager.websocket import command
 from tests.test_ha import add_entry, entry
 
@@ -66,7 +68,7 @@ async def test_legacy_configuration_migration(hass, monkeypatch, legacy):
 @pytest.mark.parametrize(
     "disabled_by", [er.RegistryEntryDisabler.USER, er.RegistryEntryDisabler.DEVICE]
 )
-async def test_cleanup_preserves_entities_and_owner_customizations(hass, monkeypatch, disabled_by):
+async def test_legacy_service_upgrade_preserves_customizations(hass, monkeypatch, disabled_by):
     current = entry()
     await add_entry(hass, current, monkeypatch)
     registry, devices = er.async_get(hass), dr.async_get(hass)
@@ -76,7 +78,7 @@ async def test_cleanup_preserves_entities_and_owner_customizations(hass, monkeyp
     entity = registry.async_get_or_create(
         "sensor",
         DOMAIN,
-        "unchanged-unique-id",
+        f"{current.entry_id}_release_channel",
         config_entry=current,
         device_id=device.id,
         original_name="Release Channel",
@@ -88,15 +90,18 @@ async def test_cleanup_preserves_entities_and_owner_customizations(hass, monkeyp
         hidden_by=er.RegistryEntryHider.USER,
         disabled_by=disabled_by,
     )
-    integration._async_cleanup_legacy_device(hass, current)
+    if disabled_by == er.RegistryEntryDisabler.DEVICE:
+        devices.async_update_device(device.id, disabled_by=dr.DeviceEntryDisabler.USER)
+    service = async_register_service(hass, current)
+    assert async_register_service(hass, current).id == service.id == device.id
     await hass.async_block_till_done()
-    assert devices.async_get(device.id) is None
+    assert devices.async_get(device.id).entry_type == dr.DeviceEntryType.SERVICE
     preserved = registry.async_get(entity.entity_id)
-    assert preserved is not None and preserved.device_id is None
-    assert preserved.unique_id == "unchanged-unique-id"
+    assert preserved is not None and preserved.device_id == service.id
+    assert preserved.unique_id == f"{current.entry_id}_release_channel"
     assert preserved.config_entry_id == current.entry_id
     assert preserved.name == "Owner's channel" and preserved.hidden_by == er.RegistryEntryHider.USER
-    assert preserved.disabled_by == er.RegistryEntryDisabler.USER
+    assert preserved.disabled_by == disabled_by
 
 
 @pytest.mark.parametrize("reason", ["foreign_entity", "different_identity", "dependent_device"])
@@ -120,7 +125,12 @@ async def test_cleanup_keeps_uncertain_or_shared_devices(hass, reason, monkeypat
             identifiers={(DOMAIN, "child")},
             via_device_id=device.id,
         )
-    integration._async_cleanup_legacy_device(hass, current)
+    if reason == "different_identity":
+        service = async_register_service(hass, current)
+        assert service.id != device.id and service.entry_type == dr.DeviceEntryType.SERVICE
+    else:
+        with pytest.raises(HomeAssistantError, match="shared registry entry"):
+            async_register_service(hass, current)
     await hass.async_block_till_done()
     assert devices.async_get(device.id) is not None
 
@@ -128,13 +138,92 @@ async def test_cleanup_keeps_uncertain_or_shared_devices(hass, reason, monkeypat
 async def test_old_ha_shared_device_is_never_removed(hass, monkeypatch):
     current = entry()
     device = SimpleNamespace(
-        identifiers={(DOMAIN, current.entry_id)}, config_entries={current.entry_id, "another"}
+        id="shared",
+        identifiers={(DOMAIN, current.entry_id)},
+        config_entries={current.entry_id, "another"},
     )
-    monkeypatch.setattr(dr, "async_entries_for_config_entry", Mock(return_value=[device]))
+    monkeypatch.setattr(
+        dr.async_get(hass), "async_get_device_by_identifier", Mock(return_value=device)
+    )
     remove = Mock()
     monkeypatch.setattr(dr.async_get(hass), "async_remove_device", remove)
-    integration._async_cleanup_legacy_device(hass, current)
+    with pytest.raises(HomeAssistantError, match="shared registry entry"):
+        async_register_service(hass, current)
     remove.assert_not_called()
+
+
+@pytest.mark.parametrize("disabled", [False, True])
+async def test_upgrade_012_service_registration_is_idempotent(hass, monkeypatch, disabled):
+    current = entry()
+    object.__setattr__(
+        current, "options", {"global_channel": RC, "channel_mode": "override", "channel": STABLE}
+    )
+    await add_entry(hass, current, monkeypatch)
+    registry, devices = er.async_get(hass), dr.async_get(hass)
+    before = {}
+    for platform, suffix in [
+        ("binary_sensor", "health"),
+        ("update", "update"),
+        ("sensor", "release_channel"),
+        ("sensor", "release_channel_mode"),
+    ]:
+        entity = registry.async_get_or_create(
+            platform,
+            DOMAIN,
+            f"{current.entry_id}_{suffix}",
+            config_entry=current,
+            suggested_object_id=f"owner_{suffix}",
+            disabled_by=er.RegistryEntryDisabler.USER if disabled else None,
+        )
+        registry.async_update_entity(
+            entity.entity_id, name=f"Custom {suffix}", hidden_by=er.RegistryEntryHider.USER
+        )
+        before[entity.entity_id] = registry.async_get(entity.entity_id)
+    service = async_register_service(hass, current)
+    devices.async_update_device(service.id, name_by_user="My service")
+    again = async_register_service(hass, current)
+    assert again.id == service.id and again.name_by_user == "My service"
+    assert again.entry_type == dr.DeviceEntryType.SERVICE
+    assert again.manufacturer == "THEFLDR" and again.name == "Integration Manager"
+    assert len(dr.async_entries_for_config_entry(devices, current.entry_id)) == 1
+    for entity_id, old in before.items():
+        upgraded = registry.async_get(entity_id)
+        assert upgraded.device_id == service.id
+        for field in ("unique_id", "config_entry_id", "name", "hidden_by", "disabled_by"):
+            assert getattr(upgraded, field) == getattr(old, field)
+    assert current.options == {"global_channel": RC, "channel_mode": "override", "channel": STABLE}
+
+
+async def test_service_registration_rejects_entities_on_unrelated_device(hass, monkeypatch):
+    current = entry()
+    await add_entry(hass, current, monkeypatch)
+    devices, registry = dr.async_get(hass), er.async_get(hass)
+    other = devices.async_get_or_create(
+        config_entry_id=current.entry_id, identifiers={(DOMAIN, "other")}
+    )
+    entity = registry.async_get_or_create(
+        "sensor",
+        DOMAIN,
+        f"{current.entry_id}_release_channel",
+        config_entry=current,
+        device_id=other.id,
+    )
+    with pytest.raises(HomeAssistantError, match="another owner"):
+        async_register_service(hass, current)
+    assert registry.async_get(entity.entity_id).device_id == other.id
+    assert len(dr.async_entries_for_config_entry(devices, current.entry_id)) == 1
+
+
+async def test_service_registration_supports_older_registry_api(hass, monkeypatch):
+    current = entry()
+    await add_entry(hass, current, monkeypatch)
+    devices = dr.async_get(hass)
+    monkeypatch.setattr(devices, "async_get_device_by_identifier", None)
+    legacy_lookup = Mock(return_value=None)
+    monkeypatch.setattr(devices, "async_get_device", legacy_lookup)
+    service = async_register_service(hass, current)
+    legacy_lookup.assert_called_once_with(identifiers={(DOMAIN, current.entry_id)})
+    assert service.entry_type == dr.DeviceEntryType.SERVICE
 
 
 async def test_dashboard_channel_controls_preserve_explicit_intent(hass, runtime, monkeypatch):
