@@ -65,7 +65,8 @@ async def hass(tmp_path):
     loader.async_setup(instance)
     instance.config_entries = ConfigEntries(instance, {})
     await instance.config_entries.async_initialize()
-    dr.async_setup(instance)
+    if hasattr(dr, "async_setup"):
+        dr.async_setup(instance)
     await dr.async_load(instance)
     await er.async_load(instance)
     yield instance
@@ -88,7 +89,7 @@ def runtime(tmp_path):
             async_remove=AsyncMock(return_value={"require_restart": False}),
         ),
     )
-    entry = SimpleNamespace(options={}, entry_id="manager")
+    entry = SimpleNamespace(options={}, entry_id="manager", pref_disable_polling=False)
     client = SimpleNamespace(
         catalog=AsyncMock(return_value=[]),
         releases=AsyncMock(return_value=[]),

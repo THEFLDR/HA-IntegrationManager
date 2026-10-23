@@ -52,7 +52,6 @@ export class IntegrationManagerPanel extends HTMLElement {
       const overview = await this.call("overview");
       this.items = overview.integrations;
       this.channel = overview.channel;
-      this.managerChannel = overview.manager_channel;
       this.managerMode = overview.manager_channel_mode || "managed";
       this.managerOverride = overview.manager_channel_override || "stable";
       this.restart = overview.restart_required;
@@ -118,6 +117,7 @@ export class IntegrationManagerPanel extends HTMLElement {
         label = { stable: "Stable", release_candidate: "Release Candidate", Stable: "Stable", "Release Candidate": "Release Candidate" }[effective] || "Unknown";
       }
       target.textContent = label;
+      if (target.tagName === "BUTTON") target.setAttribute("aria-label", `${target.dataset.name || "Entity"}: ${label}`);
     }
   }
 
@@ -126,21 +126,26 @@ export class IntegrationManagerPanel extends HTMLElement {
   }
 
   entityState(entity, parent) {
-    const state = this.node("span", "Not provided", parent);
+    const state = entity
+      ? this.button("Unavailable", parent, () => this.dispatchEvent(new CustomEvent("hass-more-info", { detail: { entityId: entity.entity_id }, bubbles: true, composed: true })))
+      : this.node("span", "Not provided", parent);
     if (entity) {
+      state.className = "entity-action";
       state.dataset.entity = entity.entity_id;
       state.dataset.kind = this.entityKind(entity);
+      state.dataset.name = entity.name;
+      if (entity.disabled || entity.hidden) state.title = "Disabled or hidden in Home Assistant; open native entity settings.";
     }
     return state;
   }
 
-  entities(entities, parent, labels = {}) {
+  entities(entities, parent) {
     const list = this.node("div", undefined, parent);
     list.className = "entities";
     if (!entities.length) this.node("small", "No matching native entities are registered.", list);
     for (const entity of entities) {
       const line = this.node("div", undefined, list);
-      const action = this.button(labels[this.entityKind(entity)] || entity.name, line, () => this.dispatchEvent(new CustomEvent("hass-more-info", { detail: { entityId: entity.entity_id }, bubbles: true, composed: true })));
+      const action = this.button(entity.name, line, () => this.dispatchEvent(new CustomEvent("hass-more-info", { detail: { entityId: entity.entity_id }, bubbles: true, composed: true })));
       action.className = "entity-action";
       this.entityState(entity, line);
       if (entity.disabled || entity.hidden) this.node("small", "This native entity is disabled or hidden in its registry settings.", line);
@@ -170,9 +175,10 @@ export class IntegrationManagerPanel extends HTMLElement {
       :host{display:block;box-sizing:border-box;padding:16px;color:var(--primary-text-color,#212121);background:var(--primary-background-color,#fafafa);font-family:var(--ha-font-family-body,Roboto,sans-serif);font-size:var(--ha-font-size-m,14px);color-scheme:light dark}
       *{box-sizing:border-box}header,.heading,.actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}header img{width:36px;height:36px}h1{font-size:22px;margin:0}h2{font-size:17px;margin:0 0 8px}h3{font-size:15px;margin:0}p{margin:8px 0}
       section{background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#ddd);border-radius:var(--ha-card-border-radius,12px);padding:12px;margin:12px 0}.settings{display:grid;align-items:start;grid-template-columns:minmax(180px,1fr) minmax(280px,2fr);gap:12px}.settings section{margin:0}
-      button,select,summary{font:inherit}button,select{min-height:36px;max-width:100%;border:1px solid var(--divider-color,#ccc);border-radius:6px;padding:6px 10px;background:var(--secondary-background-color,#f1f1f1);color:var(--primary-text-color,#212121)}button,summary,select{cursor:pointer}button:disabled,select:disabled{opacity:.6;cursor:default}button:hover:not(:disabled){background:var(--divider-color,#ddd)}:is(button,select,summary):focus-visible{outline:2px solid var(--primary-color,#03a9f4);outline-offset:2px}
-      label{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin:6px 0}small{display:block;color:var(--secondary-text-color,#727272);margin-top:4px}.entities{display:grid;gap:4px;margin-top:8px}.settings .entities{display:flex;flex-wrap:wrap;gap:4px 16px}.entity-action{background:transparent;border-color:transparent;color:var(--primary-color,#03a9f4);padding:4px;min-height:32px}.entities>div{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.entities small{flex-basis:100%}
-      .table-scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;text-align:left;min-width:620px}caption{text-align:left;color:var(--secondary-text-color,#727272);padding-bottom:8px}th,td{padding:8px;vertical-align:top;border-bottom:1px solid var(--divider-color,#ddd)}th{font-weight:500}tbody tr:last-child td{border:0}td:first-child{min-width:150px}summary{padding:4px 0;white-space:nowrap}details .actions{margin-top:8px}details .entities{min-width:220px}summary::marker{color:var(--primary-color,#03a9f4)}.catalog-row{display:flex;align-items:center;justify-content:space-between;gap:8px;border-top:1px solid var(--divider-color,#ddd);padding:8px 0}.catalog-row:first-of-type{border:0}[role=status]{white-space:pre-wrap;min-height:1em}
+      button,select,summary{font:inherit}button,select{min-height:36px;max-width:100%;border:1px solid var(--divider-color,#ccc);border-radius:6px;padding:6px 10px;background:var(--secondary-background-color,#f1f1f1);color:var(--primary-text-color,#212121)}button,summary,select{cursor:pointer}button:disabled,select:disabled{opacity:.6;cursor:default}button:hover:not(:disabled){background:var(--divider-color,#ddd)}:is(button,select,summary,a):focus-visible{outline:2px solid var(--primary-color,#03a9f4);outline-offset:2px}
+      a{color:var(--primary-color,#03a9f4);text-decoration:none}a:hover{text-decoration:underline}
+      label{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin:6px 0}small{display:block;color:var(--secondary-text-color,#727272);margin-top:4px}.entities{display:grid;gap:4px;margin-top:8px}.entity-action{background:transparent;border-color:transparent;color:var(--primary-color,#03a9f4);padding:4px;min-height:32px}.entities>div{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.entities small{flex-basis:100%}
+      .table-scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;text-align:left;min-width:620px}caption{text-align:left;color:var(--secondary-text-color,#727272);padding-bottom:8px}th,td{padding:8px;vertical-align:top;border-bottom:1px solid var(--divider-color,#ddd)}th{font-weight:500}td .entity-action{min-height:28px;padding:2px 4px}td small .entity-action{min-height:24px;padding:0 4px}tbody tr:last-child td{border:0}td:first-child{min-width:150px}summary{padding:4px 0;white-space:nowrap}details .actions{margin-top:8px}details .entities{min-width:220px}summary::marker{color:var(--primary-color,#03a9f4)}.catalog-row{display:flex;align-items:center;justify-content:space-between;gap:8px;border-top:1px solid var(--divider-color,#ddd);padding:8px 0}.catalog-row:first-of-type{border:0}[role=status]{white-space:pre-wrap;min-height:1em}
       @media(max-width:650px){:host{padding:8px}.settings{grid-template-columns:minmax(0,1fr)}section{padding:10px}th,td{padding:6px}}`;
     const header = this.node("header", undefined, root);
     const image = this.node("img", undefined, header);
@@ -191,7 +197,6 @@ export class IntegrationManagerPanel extends HTMLElement {
     global.dataset.settings = "global";
     this.node("h2", "Global Settings", global).id = "global-heading";
     this.channelSelect("Global Release Channel", this.channel, global, (channel) => this.perform("channel", { channel }));
-    this.node("small", "Used by integrations in Managed mode.", global);
     const manager = this.node("section", undefined, settings);
     manager.setAttribute("aria-labelledby", "manager-heading");
     manager.dataset.settings = "manager";
@@ -202,14 +207,6 @@ export class IntegrationManagerPanel extends HTMLElement {
     if (this.managerMode === "override") {
       this.channelSelect("Override Channel", this.managerOverride, manager, (channel) => this.perform("manager_channel", { mode: "override", channel }));
     }
-    this.node("small", "Managed follows Global Settings. Default uses Stable. Override uses its own channel.", manager);
-    const own = this.items.find((item) => item.domain === "integrationmanager");
-    this.node("small", `Installed version: ${own?.version || "Unknown"}`, manager);
-    if (!own?.entities.some((entity) => this.entityKind(entity) === "release_channel")) {
-      const effective = this.node("p", "Effective Release Channel: ", manager);
-      this.node("span", { stable: "Stable", release_candidate: "Release Candidate" }[this.managerChannel] || "Unavailable", effective);
-    }
-    this.entities(own?.entities || [], manager, { release_channel: "Effective Release Channel" });
     this.button("Check for Updates", manager, () => this.perform("check_updates"));
     const installed = this.node("section", undefined, root);
     installed.setAttribute("aria-labelledby", "installed-heading");
@@ -229,7 +226,13 @@ export class IntegrationManagerPanel extends HTMLElement {
     for (const item of this.items) {
       const row = this.node("tr", undefined, body);
       row.dataset.integration = item.domain;
-      this.node("h3", item.name, this.node("td", undefined, row));
+      const name = this.node("h3", undefined, this.node("td", undefined, row));
+      if (item.device_id) {
+        // Same native device/service URL used by HA's integration page. The
+        // backend supplies a destination only for a unique live registry entry.
+        const link = this.node("a", item.name, name);
+        link.href = `/config/devices/device/${encodeURIComponent(item.device_id)}`;
+      } else name.textContent = item.name;
       this.node("td", item.version || "Unknown", row);
       for (const kind of ["release_channel", "health", "update"]) {
         const cell = this.node("td", undefined, row);
@@ -245,7 +248,7 @@ export class IntegrationManagerPanel extends HTMLElement {
       const summary = this.node("summary", "Details", details);
       summary.setAttribute("aria-label", `Details and actions for ${item.name}`);
       this.node("small", `${item.domain}${item.files_present ? "" : " · Files removed"}`, details);
-      if (item.domain === "integrationmanager") this.node("p", "Use the Integration Manager settings above for native entity controls and updates.", details);
+      if (item.domain === "integrationmanager") this.node("p", "Open the table states for native entity controls and updates.", details);
       else {
         this.entities(item.entities, details);
         const actions = this.node("div", undefined, details);

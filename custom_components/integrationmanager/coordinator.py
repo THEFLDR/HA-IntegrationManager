@@ -26,6 +26,9 @@ async def async_get_coordinator(hass, entry, runtime):
             update_interval=timedelta(hours=6),
             config_entry=entry,
         )
+        entry.async_on_unload(
+            coordinator.async_add_listener(lambda: runtime.schedule_health(filesystem=True))
+        )
         # Offline startup keeps the local dashboard and native entities present.
         await coordinator.async_refresh()
         entry.async_on_unload(

@@ -15,6 +15,10 @@ from .const import CATALOG_URL, MAX_ARCHIVE
 class GitHubError(Exception):
     """A safe user-facing remote service failure."""
 
+    def __init__(self, message, *, transient=False):
+        super().__init__(message)
+        self.transient = transient
+
 
 class GitHubClient:
     def __init__(self, session: aiohttp.ClientSession):
@@ -54,7 +58,8 @@ class GitHubClient:
                         if response.status != 200:
                             raise GitHubError(
                                 f"Public GitHub request failed (HTTP {response.status}); "
-                                "try again later (rate limits may apply)"
+                                "try again later (rate limits may apply)",
+                                transient=response.status in {403, 429} or response.status >= 500,
                             )
                         result = bytearray()
                         async for chunk in response.content.iter_chunked(65536):
@@ -64,7 +69,9 @@ class GitHubClient:
                         return bytes(result)
                 raise GitHubError("Too many download redirects")
         except (aiohttp.ClientError, TimeoutError, ValueError) as err:
-            raise GitHubError("Public GitHub request failed; try again later") from err
+            raise GitHubError(
+                "Public GitHub request failed; try again later", transient=True
+            ) from err
 
     async def _json(self, url: str):
         cached = self.cache.get(url)

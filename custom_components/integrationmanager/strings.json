@@ -31,6 +31,9 @@
       },
       "release_channel_mode": {
         "name": "Release Channel Mode"
+      },
+      "last_update_check": {
+        "name": "Last Update Check"
       }
     },
     "update": {
@@ -41,6 +44,28 @@
     "binary_sensor": {
       "health": {
         "name": "Health"
+      }
+    }
+  },
+  "issues": {
+    "restart_required": {
+      "title": "Home Assistant restart required",
+      "description": "Integration files or configuration changed. Restart Home Assistant to activate the changes. Use Fix issue to confirm a restart.",
+      "fix_flow": {
+        "step": {
+          "confirm_restart": {
+            "title": "Restart Home Assistant?",
+            "description": "Restart Home Assistant now to activate Integration Manager changes. Active automations will be interrupted."
+          }
+        },
+        "error": {
+          "operation_in_progress": "Wait for the current integration operation to finish.",
+          "restart_failed": "Home Assistant could not restart. Inspect its logs and try again."
+        },
+        "abort": {
+          "restart_requested": "Restart requested. This issue remains until the new runtime is active.",
+          "no_restart_required": "A restart is no longer required."
+        }
       }
     }
   }

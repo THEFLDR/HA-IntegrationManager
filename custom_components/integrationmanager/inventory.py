@@ -56,8 +56,20 @@ async def overview(hass, store, catalog):
                 entry.domain, {"name": entry.title, "version": None, "files_present": False}
             )
     entry_domains = {entry.entry_id: entry.domain for entry in entries if entry.domain in installed}
+    destinations = {domain: set() for domain in installed}
+    for entry in entries:
+        if entry.domain in destinations:
+            destinations[entry.domain].update(
+                device.id for device in dr.async_entries_for_config_entry(devices, entry.entry_id)
+            )
     for domain, item in installed.items():
-        item.update(domain=domain, name=names.get(domain, item["name"]), entities=[])
+        targets = destinations[domain]
+        item.update(
+            domain=domain,
+            name=names.get(domain, item["name"]),
+            entities=[],
+            device_id=next(iter(targets)) if len(targets) == 1 else None,
+        )
     for entity in registry.entities.values():
         domains = (
             {entry_domains[entity.config_entry_id]}
@@ -69,11 +81,15 @@ async def overview(hass, store, catalog):
             and entity.device_id
             and (device := devices.async_get(entity.device_id))
         ):
-            domains.update(entry_domains[e] for e in device.config_entries if e in entry_domains)
+            owner = getattr(device, "config_entry_id", None)
+            owners = {owner} if owner else device.config_entries
+            domains.update(entry_domains[e] for e in owners if e in entry_domains)
         # Include only existing native entities. Never create or enable/disable another integration's entities.
         kind = entity.domain
         label = (entity.original_name or entity.name or "").casefold()
-        if kind == "update":
+        if entity.translation_key == "last_update_check":
+            entity_kind = "last_update_check"
+        elif kind == "update":
             entity_kind = "update"
         elif entity.translation_key == "release_channel_mode" or label == "release channel mode":
             entity_kind = "release_channel_mode"

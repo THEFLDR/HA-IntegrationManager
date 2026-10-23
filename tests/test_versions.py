@@ -97,7 +97,7 @@ def test_archive_does_not_normalize_prefixed_versions(archive, location):
 
 
 def test_version_is_identical_in_manifest_metadata_and_release_channels(tmp_path, release_payload):
-    assert VERSION == "0.1.3"
+    assert VERSION == "0.1.4"
     artifact = build(tmp_path, VERSION)
     with zipfile.ZipFile(artifact) as package:
         metadata = json.loads(package.read("release.json"))
