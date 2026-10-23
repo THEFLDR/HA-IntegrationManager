@@ -131,6 +131,9 @@ async def test_lifecycle(hass, monkeypatch):
     assert await integration.async_setup_entry(hass, current)
     assert hass.data[DOMAIN].channel == STABLE
     assert panel.call_args.kwargs["require_admin"] is True
+    assert panel.call_args.kwargs["sidebar_icon"] == "mdi:puzzle"
+    assert panel.call_args.kwargs["sidebar_title"] == "Integration Manager"
+    assert panel.call_args.kwargs["module_url"] == f"/{DOMAIN}_static/panel.js?v={VERSION}"
     async with hass.data[DOMAIN].lock:
         assert await integration.async_unload_entry(hass, current) is False
     assert await integration.async_unload_entry(hass, current)

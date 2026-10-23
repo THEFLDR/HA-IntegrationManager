@@ -97,7 +97,7 @@ def test_archive_does_not_normalize_prefixed_versions(archive, location):
 
 
 def test_version_is_identical_in_manifest_metadata_and_release_channels(tmp_path, release_payload):
-    assert VERSION == "0.1.4"
+    assert VERSION == "0.1.5"
     artifact = build(tmp_path, VERSION)
     with zipfile.ZipFile(artifact) as package:
         metadata = json.loads(package.read("release.json"))
@@ -140,7 +140,7 @@ def test_release_cli_module_works_without_third_party_dependencies():
 def test_publication_rejects_wrong_returned_tag(monkeypatch, returned_tag):
     monkeypatch.setenv("GITHUB_REPOSITORY", "THEFLDR/HA-IntegrationManager")
     monkeypatch.setattr(publisher, "verify_main_ci", Mock())
-    monkeypatch.setattr(publisher, "tag_target", Mock(return_value=None))
+    monkeypatch.setattr(publisher, "published", Mock(return_value=False))
     monkeypatch.setattr(publisher, "gh", Mock())
     monkeypatch.setattr(
         publisher,
@@ -148,7 +148,7 @@ def test_publication_rejects_wrong_returned_tag(monkeypatch, returned_tag):
         Mock(
             side_effect=[
                 {"object": {"sha": "a" * 40}},
-                [],
+                {"object": {"sha": "a" * 40}},
                 {"tag_name": returned_tag, "immutable": True, "prerelease": True},
             ]
         ),
