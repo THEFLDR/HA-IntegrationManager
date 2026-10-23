@@ -49,9 +49,9 @@ async def async_setup_entry(hass, entry):
             frontend_url_path=DOMAIN,
             webcomponent_name="integrationmanager-panel",
             sidebar_title=NAME,
-            # HA's documented custom icon providers return SVG paths, not
-            # raster images. Keep the supported fallback; the panel header
-            # displays our exact approved PNG through the static route.
+            # The monochrome path tracing is an unapproved preview: fine
+            # geometry loses clarity at 24px. Keep the approved fallback until
+            # visual review; the panel still uses the exact full-color PNG.
             sidebar_icon="mdi:puzzle",
             module_url=f"/{DOMAIN}_static/panel.js?v={VERSION}",
             require_admin=True,

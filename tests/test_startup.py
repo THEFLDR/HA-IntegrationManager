@@ -1,5 +1,6 @@
 """Exercise actual HA loading, config entries and native entity platforms."""
 
+import hashlib
 import socket
 from importlib.util import find_spec
 from unittest.mock import AsyncMock
@@ -30,7 +31,11 @@ from custom_components.integrationmanager.const import DOMAIN, NAME, RC, STABLE
         (False, "0.1.3-custom"),
     ],
 )
-async def test_actual_home_assistant_startup(tmp_path, monkeypatch, offline, legacy):
+async def test_actual_home_assistant_startup(
+    tmp_path, monkeypatch, offline, legacy, archive, release_payload
+):
+    from homeassistant.exceptions import HomeAssistantError
+
     from custom_components.integrationmanager.files import FileStore, validate_archive
     from custom_components.integrationmanager.github import GitHubClient, GitHubError
     from scripts.package import build
@@ -97,7 +102,7 @@ async def test_actual_home_assistant_startup(tmp_path, monkeypatch, offline, leg
     )
     instance = HomeAssistant(str(tmp_path))
     package = build(tmp_path / "package").read_bytes()
-    FileStore(str(tmp_path)).install(DOMAIN, validate_archive(package, DOMAIN, "0.1.5", HA_VERSION))
+    FileStore(str(tmp_path)).install(DOMAIN, validate_archive(package, DOMAIN, "0.1.6", HA_VERSION))
     instance.config.skip_pip = True
     loader.async_setup(instance)
     with socket.socket() as reservation:
@@ -156,7 +161,7 @@ async def test_actual_home_assistant_startup(tmp_path, monkeypatch, offline, leg
         else:
             assert service.config_entries == {config_entry.entry_id}
         assert service.name == NAME and service.manufacturer is None
-        assert service.sw_version == "0.1.5"
+        assert service.sw_version == "0.1.6"
         registry = er.async_get(instance)
         registered = er.async_entries_for_config_entry(registry, config_entry.entry_id)
         assert len(registered) == 5
@@ -312,6 +317,67 @@ async def test_actual_home_assistant_startup(tmp_path, monkeypatch, offline, leg
                         ]
                         assert len(native_entities) == 5
                         assert all(item["device_id"] == service.id for item in native_entities)
+        if not offline and legacy is None:
+            # Exercise HA's real Update service and live entity attributes,
+            # not just Manager.self_update() or a direct entity method call.
+            data = archive(DOMAIN, "0.2.0")
+            payload = release_payload("0.2.0")
+            payload["assets"] = [
+                {
+                    "id": 42,
+                    "name": f"{DOMAIN}.zip",
+                    "size": len(data),
+                    "digest": f"sha256:{hashlib.sha256(data).hexdigest()}",
+                }
+            ]
+            monkeypatch.setattr(GitHubClient, "releases", AsyncMock(return_value=[payload]))
+            monkeypatch.setattr(GitHubClient, "download", AsyncMock(return_value=data))
+            runtime = instance.data[DOMAIN]
+            await runtime.check_for_updates()
+            await instance.async_block_till_done()
+            update_id = registry.async_get_entity_id(
+                "update", DOMAIN, f"{config_entry.entry_id}_update"
+            )
+            seen = []
+
+            def changed(event):
+                if event.data["entity_id"] == update_id and (state := event.data.get("new_state")):
+                    seen.append(state.attributes.get("update_status", {}))
+
+            unsubscribe = instance.bus.async_listen("state_changed", changed)
+            try:
+                monkeypatch.setattr(
+                    GitHubClient,
+                    "download",
+                    AsyncMock(side_effect=GitHubError("Native download offline")),
+                )
+                with pytest.raises(HomeAssistantError, match="Native download offline"):
+                    await instance.services.async_call(
+                        "update",
+                        "install",
+                        {"entity_id": update_id, "backup": False},
+                        blocking=True,
+                    )
+                await instance.async_block_till_done()
+                failed = instance.states.get(update_id).attributes
+                assert failed["in_progress"] is False
+                assert failed["update_status"]["phase"] == "failed"
+                assert failed["update_status"]["error"] == "Native download offline"
+                monkeypatch.setattr(GitHubClient, "download", AsyncMock(return_value=data))
+                await instance.services.async_call(
+                    "update", "install", {"entity_id": update_id, "backup": False}, blocking=True
+                )
+                await instance.async_block_till_done()
+            finally:
+                unsubscribe()
+            assert any(status.get("in_progress") for status in seen)
+            result = instance.states.get(update_id).attributes
+            assert result["in_progress"] is False
+            assert result["update_status"]["phase"] == "restart_required"
+            assert result["update_status"]["files_installed"] is True
+            assert result["update_status"]["target_version"] == "0.2.0"
+            assert result["installed_version"] == "0.1.6"
+            assert result["update_percentage"] is None
         await instance.async_block_till_done(wait_background_tasks=True)
         assert await instance.config_entries.async_unload(created["result"].entry_id)
         assert DOMAIN not in instance.data

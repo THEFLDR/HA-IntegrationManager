@@ -55,6 +55,7 @@ export class IntegrationManagerPanel extends HTMLElement {
       this.managerMode = overview.manager_channel_mode || "managed";
       this.managerOverride = overview.manager_channel_override || "stable";
       this.restart = overview.restart_required;
+      this.updateStatusData = overview.update_status;
       try {
         this.catalog = (await this.call("catalog")).integrations;
         this.catalogError = "";
@@ -119,6 +120,76 @@ export class IntegrationManagerPanel extends HTMLElement {
       target.textContent = label;
       if (target.tagName === "BUTTON") target.setAttribute("aria-label", `${target.dataset.name || "Entity"}: ${label}`);
     }
+    this.updateSelfUpdate();
+  }
+
+  updateSelfUpdate() {
+    const section = this.shadowRoot.querySelector("[data-self-update]");
+    if (!section) return;
+    const manager = this.items.find((item) => item.domain === "integrationmanager");
+    const entity = manager?.entities.find((item) => this.entityKind(item) === "update");
+    const native = entity && this._hass?.states?.[entity.entity_id];
+    // A late overview response must never replace newer native entity data.
+    const status = native?.attributes?.update_status ?? this.updateStatusData;
+    if (typeof native?.attributes?.restart_required === "boolean") this.restart = native.attributes.restart_required;
+    const notice = this.shadowRoot.querySelector("[data-restart-notice]");
+    if (notice) notice.hidden = !this.restart;
+    for (const select of this.shadowRoot.querySelectorAll("select")) select.disabled = this.busy || this.restart || !!status?.in_progress || !!status?.restart_required;
+    const check = this.shadowRoot.querySelector("[data-settings=manager] button");
+    if (check) check.disabled = this.busy || !!status?.in_progress;
+    const signature = JSON.stringify([status, entity?.entity_id, native?.state]);
+    if (section.dataset.signature === signature) return;
+    section.dataset.signature = signature;
+    const copy = section.querySelector("[data-update-copy]");
+    copy.replaceChildren();
+    const phase = status?.phase;
+    const stages = [["checking_release", "Checking release"], ["downloading", "Downloading"], ["validating_archive", "Validating archive"], ...(status?.backup_requested ? [["backing_up", "Backing up"]] : []), ["installing_files", "Installing files"], ["restart_required", "Restart HA"], ["completed", "Completed"]];
+    const labels = Object.fromEntries(stages);
+    const active = !!status?.in_progress;
+    let title = active ? (labels[phase] || "Updating…") : "No self-update started";
+    let outcome = active ? "active" : "idle";
+    if (!active && phase === "restart_required") {
+      title = status.files_installed ? "Files installed — restart required" : "Files changed — restart required";
+      outcome = "pending";
+    } else if (!active && phase === "completed") {
+      title = `Update completed — running ${status.running_version}`;
+      outcome = "success";
+    } else if (!active && phase === "failed") {
+      title = "Update failed";
+      outcome = "failed";
+    } else if (!active && ["cancelled", "interrupted", "restart_mismatch"].includes(phase)) {
+      title = { cancelled: "Update cancelled", interrupted: "Update interrupted", restart_mismatch: "Restart did not activate the update" }[phase];
+      outcome = "warning";
+    }
+    section.dataset.outcome = outcome;
+    this.node("strong", title, copy);
+    this.node("p", status ? `Running ${status.running_version}${status.target_version ? ` · Target ${status.target_version}` : ""}` : "Waiting for update status from Home Assistant…", copy);
+    if (status?.error) this.node("p", status.error, copy).className = "update-error";
+    if (status?.restart_required && phase !== "restart_required") this.node("p", "Files may have changed — restart required. Inspect Health and the error before restarting.", copy);
+    if (status && entity && (!native || ["unavailable", "unknown"].includes(native.state))) this.node("small", "Native Update is unavailable; showing its last reported update status.", copy);
+    if (active) {
+      const progress = this.node("progress", undefined, copy);
+      progress.setAttribute("aria-label", title);
+      // No value means indeterminate: these operations have no reliable total.
+    }
+    if (phase) {
+      const list = this.node("ol", undefined, copy);
+      list.className = "update-steps";
+      list.setAttribute("aria-label", "Self-update steps");
+      const currentPhase = labels[phase] ? phase : status.files_installed ? "restart_required" : status.step;
+      const current = stages.findIndex(([key]) => key === currentPhase);
+      for (const [index, [key, label]] of stages.entries()) {
+        const done = index < current || phase === "completed";
+        const step = this.node("li", done ? `${label} ✓` : label, list);
+        step.dataset.state = done ? "done" : index === current ? "current" : "pending";
+        step.setAttribute("aria-label", `${label}: ${done ? "completed" : index === current ? active ? "in progress" : "awaiting attention" : "pending"}`);
+        if (index === current && phase !== "completed") step.setAttribute("aria-current", "step");
+      }
+    }
+    const nativeButton = section.querySelector("[data-open-update]");
+    nativeButton.hidden = !entity;
+    nativeButton.onclick = entity ? () => this.dispatchEvent(new CustomEvent("hass-more-info", { detail: { entityId: entity.entity_id }, bubbles: true, composed: true })) : null;
+    section.querySelector("[data-open-repairs]").hidden = !status?.restart_required;
   }
 
   entityKind(entity) {
@@ -179,6 +250,7 @@ export class IntegrationManagerPanel extends HTMLElement {
       a{color:var(--primary-color,#03a9f4);text-decoration:none}a:hover{text-decoration:underline}
       label{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin:6px 0}small{display:block;color:var(--secondary-text-color,#727272);margin-top:4px}.entities{display:grid;gap:4px;margin-top:8px}.entity-action{background:transparent;border-color:transparent;color:var(--primary-color,#03a9f4);padding:4px;min-height:32px}.entities>div{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.entities small{flex-basis:100%}
       .table-scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;text-align:left;min-width:760px}caption{text-align:left;color:var(--secondary-text-color,#727272);padding-bottom:8px}th,td{padding:8px;vertical-align:top;border-bottom:1px solid var(--divider-color,#ddd)}th{font-weight:500}td .entity-action{min-height:28px;padding:2px 4px}tbody tr:last-child td{border:0}td:first-child{min-width:150px}summary{padding:4px 0;white-space:nowrap}details .actions{margin-top:8px}details .entities{min-width:220px}summary::marker{color:var(--primary-color,#03a9f4)}.catalog-row{display:flex;align-items:center;justify-content:space-between;gap:8px;border-top:1px solid var(--divider-color,#ddd);padding:8px 0}.catalog-row:first-of-type{border:0}[role=status]{white-space:pre-wrap;min-height:1em}
+      .self-update{border-left:4px solid var(--divider-color,#ddd)}.self-update[data-outcome=active]{border-left-color:var(--primary-color,#03a9f4)}.self-update[data-outcome=pending],.self-update[data-outcome=warning]{border-left-color:var(--warning-color,#ffa600)}.self-update[data-outcome=success]{border-left-color:var(--success-color,#43a047)}.self-update[data-outcome=failed]{border-left-color:var(--error-color,#db4437)}.self-update strong{font-size:16px}.self-update progress{width:100%;height:8px;accent-color:var(--primary-color,#03a9f4)}.update-steps{display:flex;flex-wrap:wrap;gap:6px 24px;padding-left:24px;margin:12px 0;color:var(--secondary-text-color,#727272)}.update-steps [data-state=done]{color:var(--success-color,#43a047)}.update-steps [data-state=current]{color:var(--primary-text-color,#212121);font-weight:600}.update-error{overflow-wrap:anywhere}.self-update .actions a{padding:8px 4px}[hidden]{display:none!important}
       @media(max-width:650px){:host{padding:8px}.settings{grid-template-columns:minmax(0,1fr)}section{padding:10px}th,td{padding:6px}}`;
     const header = this.node("header", undefined, root);
     const image = this.node("img", undefined, header);
@@ -189,7 +261,24 @@ export class IntegrationManagerPanel extends HTMLElement {
     const feedback = this.node("p", this.message || "", root);
     feedback.setAttribute("role", "status");
     feedback.setAttribute("aria-live", "polite");
-    if (this.restart) this.node("p", "Restart required. Restart Home Assistant manually to apply file changes.", root);
+    const restartNotice = this.node("p", "Restart required. Confirm a restart through Repairs, or restart Home Assistant manually.", root);
+    restartNotice.dataset.restartNotice = "";
+    restartNotice.hidden = !this.restart;
+    const status = this.node("section", undefined, root);
+    status.className = "self-update";
+    status.dataset.selfUpdate = "";
+    status.setAttribute("aria-labelledby", "self-update-heading");
+    this.node("h2", "Self-update status", status).id = "self-update-heading";
+    const copy = this.node("div", undefined, status);
+    copy.dataset.updateCopy = "";
+    copy.setAttribute("role", "status");
+    copy.setAttribute("aria-live", "polite");
+    const statusActions = this.node("div", undefined, status);
+    statusActions.className = "actions";
+    this.button("Open native Update", statusActions, () => {}).dataset.openUpdate = "";
+    const repairs = this.node("a", "Open Repairs — Fix issue to confirm restart", statusActions);
+    repairs.href = "/config/repairs";
+    repairs.dataset.openRepairs = "";
     const settings = this.node("div", undefined, root);
     settings.className = "settings";
     const global = this.node("section", undefined, settings);

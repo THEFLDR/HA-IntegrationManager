@@ -85,6 +85,7 @@ class ManagerUpdate(CoordinatorEntity, UpdateEntity):
             "restart_required": self.runtime.restart_required,
             "update_phase": self.runtime.update_phase,
             "last_error": self.runtime.update_error,
+            "update_status": self.runtime.self_update_status,
         }
 
     async def async_release_notes(self):

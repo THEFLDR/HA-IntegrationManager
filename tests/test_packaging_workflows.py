@@ -15,11 +15,11 @@ from scripts.package import ROOT, build
 
 
 def test_package_deterministic_and_installable(tmp_path):
-    artifact = build(tmp_path, "0.1.5")
+    artifact = build(tmp_path, "0.1.6")
     first = artifact.read_bytes()
-    assert build(tmp_path, "0.1.5").read_bytes() == first
+    assert build(tmp_path, "0.1.6").read_bytes() == first
     assert MIN_HA_VERSION == "2025.12.0"
-    files = validate_archive(first, DOMAIN, "0.1.5", MIN_HA_VERSION)
+    files = validate_archive(first, DOMAIN, "0.1.6", MIN_HA_VERSION)
     with zipfile.ZipFile(artifact) as archive:
         assert (
             json.loads(archive.read("release.json"))["minimum_home_assistant_version"]
@@ -143,7 +143,7 @@ def test_manifest_and_catalog():
     manifest = json.loads((ROOT / f"custom_components/{DOMAIN}/manifest.json").read_text())
     assert manifest["domain"] == DOMAIN
     assert manifest["codeowners"] == ["@THEFLDR"]
-    assert manifest["version"] == "0.1.5"
+    assert manifest["version"] == "0.1.6"
     assert parse_catalog(json.loads((ROOT / "repositories.json").read_text())) == []
 
 
@@ -290,3 +290,23 @@ def test_changed_promotion_artifacts_rejected(monkeypatch):
     monkeypatch.setattr(publisher, "verify_main_ci", Mock())
     with pytest.raises(ValueError, match="assets changed"):
         publisher.main("promote", "0.1.1", "a" * 40)
+
+
+def test_sidebar_trace_is_a_labeled_vector_candidate_outside_the_installable_package(tmp_path):
+    from defusedxml.ElementTree import fromstring
+
+    svg = fromstring((ROOT / "previews/0.1.6-sidebar-icon-candidate.svg").read_bytes())
+    namespace = "{http://www.w3.org/2000/svg}"
+    assert [element.tag for element in svg] == [
+        f"{namespace}title",
+        f"{namespace}desc",
+        f"{namespace}path",
+    ]
+    assert "Unapproved" in svg[0].text
+    assert hashlib.sha256((ROOT / "approved-icon.png").read_bytes()).hexdigest() in svg[1].text
+    assert svg.attrib["viewBox"] == "0 0 512 512"
+    assert svg[2].attrib["fill"] == "currentColor"
+    assert svg[2].attrib["d"].startswith("M") and "C" in svg[2].attrib["d"]
+    assert "data:" not in svg[2].attrib["d"]
+    with zipfile.ZipFile(build(tmp_path)) as archive:
+        assert not any("candidate" in name or "previews" in name for name in archive.namelist())
